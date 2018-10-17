@@ -92,7 +92,6 @@ def fftfreqs(res):
     freqs.append(np.fft.rfftfreq(r_, d=1/r_)[:-1])
     omega = np.meshgrid(*freqs, indexing='ij')
     omega = list(omega)
-    omega[0], omega[1] = omega[1], omega[0]
     omega = np.stack(omega, axis=-1)
 
     return omega
@@ -404,8 +403,8 @@ def simplex_ft_kernel2(V, E, D, C, P, omega, F):
             u = (iu - r[0] / 2 + eps) * omega[0]
             for iv in range(start_v, int(r[1]), stride_v):
                 v = (iv + eps) * omega[1]
-                uv[0] = v
-                uv[1] = u
+                uv[0] = u
+                uv[1] = v
                 for ic in range(n_channel):
                     if not ( u == 0 and v == 0):
                         F[iu, iv, ic] += simplex_ft_device(P[i], uv) * C[i] * D[i, ic]
