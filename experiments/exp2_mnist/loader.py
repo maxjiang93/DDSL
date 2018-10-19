@@ -65,17 +65,14 @@ def poly2ve(Poly):
 
 # data loader module
 class PMNISTDataSet(Dataset):
-    def __init__(self, path, partition='train', imsize=28, 
-                 train_ratio=1.0, random_state=0, cache_root='./cache'):
+    def __init__(self, path, partition='train', imsize=28, cache_root='./cache'):
         """
         Args:
             path (string): Directory containing polygon and label json files.
-            partition (string): train, test or valid
+            partition (string): train or test
             imsize (int): imsize * imsize is the scale to feed output images
-            train_ratio (float): ratio to split train into train and valid sets
-            random_state (int): random state for splitting train and valid sets
         """
-        assert(partition in ['train', 'test', 'valid'])
+        assert(partition in ['train', 'test'])
         
         self.partition = partition
         self.imsize = imsize
@@ -93,19 +90,6 @@ class PMNISTDataSet(Dataset):
                 self.plist = json.load(infile)
             with open(os.path.join(path, "mnist_label_train.json"), 'r') as infile:
                 self.label = json.load(infile)
-                
-        # split train into train and valid
-        if partition in ['train', 'valid']:
-            train_poly, valid_poly, train_label, valid_label = train_test_split(self.plist, 
-                                                                                self.label, 
-                                                                                test_size=(1-train_ratio), 
-                                                                                random_state=random_state)
-            if partition == 'train':
-                self.plist = train_poly
-                self.label = train_label
-            else:
-                self.plist = valid_poly
-                self.label = valid_label
 
         # cache options
         if not os.path.exists(self.cache_dir):
