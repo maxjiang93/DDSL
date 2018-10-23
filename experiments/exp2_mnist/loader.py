@@ -116,7 +116,7 @@ class PMNISTDataSet(Dataset):
         cache_file = os.path.join(self.cache_dir, 'cache_{:05d}.pkl'.format(idx))
         P = wkt.loads(self.plist[idx])
         V, E = poly2ve(P)
-        V += 1e-9*np.random.rand(*V.shape)
+        V += 1e-6*np.random.rand(*V.shape)
         F = simplex_ft_cpu(V, E, np.ones((E.shape[0], 1)), res=(self.imsize+2, self.imsize+2), t=(1,1), j=2)
         F = np.squeeze(F)
         half = int(self.imsize/2+1)

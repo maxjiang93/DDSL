@@ -1,8 +1,9 @@
 from shapely import geometry, affinity, wkt
 from scipy.misc import imsave
 import numpy as np
+import matplotlib
+matplotlib.use('agg')
 import matplotlib.pyplot as plt
-plt.switch_backend('agg')
 from mnist import MNIST
 from tqdm import tqdm
 import os
@@ -101,6 +102,7 @@ def mnist2poly(image, hd_dim=64, wkt=False):
     image_F = np.fft.ifftshift(image_F, axes=(0))
     image = np.fft.irfft2(image_F)
     cs = plt.contour(image, [(image.max()+image.min())/2])
+    plt.close()
     polys = []
     
     for col in cs.collections:
@@ -158,30 +160,24 @@ def poly2phys(p, dim, upres=1, output=None):
     elif isinstance(output, str):
         imsave(output, f)
 
-def process_mnist2poly(input_list, outfile, n_jobs=-1, hd_dim=64, prog_bar=True):
+def process_mnist2poly(input_list, outfile, hd_dim=64):
     """
     Process images in mnist dataset given list of images
     Inputs:
     input_list: list containing images
-    n_jobs: number of jobs (parallel workers)
     hd_dim: expansion dimension for extracting contours
     """
-    P_list = []
-    if prog_bar:
-        pbar = tqdm(total=len(input_list))
-    folds = 1000
-    interval = ceil(len(input_list)/folds)
-    for idx in range(folds):
-        with Parallel(n_jobs=n_jobs) as parallel:
-            p_list = parallel(delayed(mnist2poly)(np.array(im_list).reshape([28, 28], order='C'), hd_dim, True) 
-                         for im_list in input_list[idx*interval:(idx+1)*interval])
-            P_list += p_list
-            if prog_bar:
-                pbar.update(len(input_list[idx*interval:(idx+1)*interval]))
+    P_list = [None] * len(input_list)
+    pbar = tqdm(total=len(input_list))
+    for i, im_list in enumerate(input_list):
+        P_list[i] = mnist2poly(np.array(im_list).reshape([28, 28], order='C'), hd_dim, True)
+        pbar.update(1)
+
     with open(outfile, 'w') as outputfile:
         json.dump(P_list, outputfile)
     if prog_bar:
         pbar.close()
+
 
 def main():
     # load mnist
@@ -195,8 +191,10 @@ def main():
         os.mkdirs(output_root)
     train_file = os.path.join(output_root, "mnist_polygon_train.json")
     test_file = os.path.join(output_root, "mnist_polygon_test.json")
-    process_mnist2poly(images_train, n_jobs=-1, outfile=train_file, prog_bar=True)
-    process_mnist2poly(images_test, n_jobs=-1, outfile=test_file, prog_bar=True)
+    print("Processing training files...")
+    process_mnist2poly(images_train, outfile=train_file)
+    print("Processing test files...")
+    process_mnist2poly(images_test, outfile=test_file)
     # write labels to json file
     with open(os.path.join(output_root, "mnist_label_train.json"), 'w') as outputfile:
         json.dump(list(labels_train), outputfile)

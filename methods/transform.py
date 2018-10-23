@@ -507,8 +507,8 @@ def simplex_ft_bw_gpu(dF, V, E, D, res, t, j, mode='density', gpuid=0):
     # initialize output dV
     dV_shape = list(V.shape)
     dFdV_shape = tuple([j+1, n_dims] + list(dF.shape))
-    dV = np.zeros(dV_shape, dtype=np.complex128)
-    dFdV = np.zeros(dFdV_shape, dtype=np.complex128)
+    dV = np.zeros(dV_shape, dtype=np.float64)
+    dFdV = np.zeros(dFdV_shape, dtype=np.float64)
 
     # compute content array and P array
     C = np.zeros(n_elem)
@@ -621,20 +621,26 @@ def simplex_ft_bw_device2(p, uv, df, c):
     pny  = p[(ip+1)%(j+1), 1]
     pnnx = p[(ip+2)%(j+1), 0]
     pnny = p[(ip+2)%(j+1), 1]
-    res00 = df*(-uv[0]*fac[ip]*c-S*(pny-pnny))
-    res01 = df*(-uv[1]*fac[ip]*c-S*(-pnx+pnnx))
+    res00 = -uv[0]*fac[ip]*c-S*(pny-pnny)
+    res01 = -uv[1]*fac[ip]*c-S*(-pnx+pnnx)
+    res00 = res00.real * df.real + res00.imag * df.imag
+    res01 = res01.real * df.real + res01.imag * df.imag
     ip = 1
     pnx  = p[(ip+1)%(j+1), 0]
     pny  = p[(ip+1)%(j+1), 1]
     pnnx = p[(ip+2)%(j+1), 0]
     pnny = p[(ip+2)%(j+1), 1]
-    res10 = df*(-uv[0]*fac[ip]*c-S*(pny-pnny))
-    res11 = df*(-uv[1]*fac[ip]*c-S*(-pnx+pnnx))
+    res10 = -uv[0]*fac[ip]*c-S*(pny-pnny)
+    res11 = -uv[1]*fac[ip]*c-S*(-pnx+pnnx)
+    res10 = res10.real * df.real + res10.imag * df.imag
+    res11 = res11.real * df.real + res11.imag * df.imag
     ip = 2
     pnx  = p[(ip+1)%(j+1), 0]
     pny  = p[(ip+1)%(j+1), 1]
     pnnx = p[(ip+2)%(j+1), 0]
     pnny = p[(ip+2)%(j+1), 1]
-    res20 = df*(-uv[0]*fac[ip]*c-S*(pny-pnny))
-    res21 = df*(-uv[1]*fac[ip]*c-S*(-pnx+pnnx))
+    res20 = -uv[0]*fac[ip]*c-S*(pny-pnny)
+    res21 = -uv[1]*fac[ip]*c-S*(-pnx+pnnx)
+    res20 = res20.real * df.real + res20.imag * df.imag
+    res21 = res21.real * df.real + res21.imag * df.imag
     return res00, res01, res10, res11, res20, res21

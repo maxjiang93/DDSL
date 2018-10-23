@@ -11,13 +11,10 @@ import argparse
 import numpy as np
 import datetime
 import shutil
-import multiprocessing
 
 from loader import PMNISTDataSet
 from model import LeNet5
 
-MEAN = 0.14807655
-STD = 0.36801067
 
 def init_logger(args):
     if not os.path.exists(args.logdir):
@@ -94,7 +91,7 @@ def main():
     parser.add_argument('-l', '--logdir', type=str, help='log directory path')
     parser.add_argument('-d', '--datadir', type=str, default="./data/polyMNIST", help='data directory path')
     parser.add_argument('-n', '--epoch', type=int, default=20, help='number of epochs to train')
-    parser.add_argument('-j', '--jobs', type=int, default=-1, help='number of threads to use')
+    parser.add_argument('-j', '--jobs', type=int, default=6, help='number of threads to use')
     parser.add_argument('-b', '--batch', type=int, default=64, help='batch size to use')
     parser.add_argument('-c', '--cache_root', type=str, default='./cache', help='path to directory to cache')
     parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
@@ -102,8 +99,7 @@ def main():
     parser.add_argument('--seed', type=int, default=0, help='random seed.')
     parser.add_argument('--no_cuda', action='store_true', default=0, help='Not use GPU.')
     parser.add_argument('--optim', type=str, default='sgd', choices=['sgd', 'adam'],metavar='OPT', help='optimizer')
-    parser.add_argument('--log_interval', type=int, default=100, help='logging interval')
-    parser.add_argument('--no_decay', action='store_true', help='decay learning rate')
+    parser.add_argument('--log_interval', type=int, default=10, help='logging interval')
 
     args = parser.parse_args()
 
@@ -116,8 +112,6 @@ def main():
     
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
-    if args.jobs < 0:
-        args.jobs = multiprocessing.cpu_count()
 
     # logger and snapshot current code
     logger = init_logger(args)
@@ -125,20 +119,18 @@ def main():
 
 
     # dataloader
-    trainset = PMNISTDataSet(args.datadir, 'train', imsize=args.imsize, cache_root=args.cache_root)
+    trainset = PMNISTDataSet(args.datadir, 'train', imsize=args.imsize, train_ratio=0.9, cache_root=args.cache_root)
     trainloader = DataLoader(trainset, batch_size=args.batch, shuffle=True, num_workers=args.jobs)
+    validset = PMNISTDataSet(args.datadir, 'valid', imsize=args.imsize, train_ratio=0.9, cache_root=args.cache_root)
+    validloader = DataLoader(validset, batch_size=args.batch, shuffle=True, num_workers=args.jobs)
     testset = PMNISTDataSet(args.datadir, 'test', imsize=args.imsize, cache_root=args.cache_root)
     testloader = DataLoader(testset, batch_size=args.batch, shuffle=True, num_workers=args.jobs)
 
-    model = LeNet5((args.imsize, args.imsize), MEAN, STD)
+    model = LeNet5((args.imsize, args.imsize))
     if args.optim == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
     else:
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
-
-    # LR decay scheduler
-    if not args.no_decay:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
     if use_cuda:
         model = nn.DataParallel(model)
@@ -147,7 +139,10 @@ def main():
 
     for epoch in range(args.epoch):  # loop over the dataset
         train(args, model, optimizer, epoch, device, trainloader, logger)
-        test(args, model, epoch, device, testloader, logger)
+        test(args, model, epoch, device, validloader, logger)
+
+    # test
+    test(args, model, epoch, device, testloader, logger)
 
     # save checkpoint
     torch.save({
