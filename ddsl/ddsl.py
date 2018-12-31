@@ -1,5 +1,3 @@
-## TODO: Check backwards for line mesh (j=1)
-
 import torch
 import torch.nn as nn
 from torch.autograd import Function
@@ -172,10 +170,11 @@ class SimplexFT(Function):
                 tmp = tmp.permute(*(list(range(2, 2+n_dims)) + [0, 1] + list(range(2+n_dims, len(tmp.shape)))))
                 tmp[tuple([0] * n_dims)] = 0
                 tmp = tmp.permute(*(list(range(n_dims, 2+n_dims)) + list(range(n_dims)) + list(range(2+n_dims, len(tmp.shape)))))
+                tmp = img(tmp, deg=j)
                 tmp *= dF # [elem_batch, j+1, dimX, dimY, dimZ, n_channel, 2]
                 tmp = tmp.unsqueeze(-3) * omega.unsqueeze(-1).unsqueeze(-1) # [elem_batch, j+1, dimX, dimY, dimZ, n_dims, n_channel, 2]
                 tmp = torch.sum(tmp, dim=tuple([-1]+list(range(2, 2+n_dims)))) # [elem_batch, j+1, n_dims, n_channel]
-                tmp = torch.sum(tmp * Di.unsqueeze(1).unsqueeze(1), dim=3)     # [elem_batch, j+1, n_dims]
+                tmp = torch.sum(tmp * Di.unsqueeze(1).unsqueeze(1), dim=-1)     # [elem_batch, j+1, n_dims]
                 tmp *= Ci.unsqueeze(-1) # [elem_batch, j+1, n_dims]
                 
                 # second part: tmp2
@@ -183,7 +182,7 @@ class SimplexFT(Function):
                 S = S.permute(*(list(range(1, 1+n_dims)) + [0] + list(range(1+n_dims, len(S.shape))))) # [dimX, dimY, dimZ, elem_batch, 1, 2]
                 S[tuple([0] * n_dims)] = - 1 / factorial(j)
                 S = S.permute(*([n_dims] + list(range(n_dims)) + list(range(1+n_dims, len(S.shape))))) # [elem_batch, dimX, dimY, dimZ, 1, 2]
-                tmp2 = S * dF # [elem_batch, dimX, dimY, dimZ, n_channel, 2]
+                tmp2 = img(S, deg=j) * dF # [elem_batch, dimX, dimY, dimZ, n_channel, 2]
                 tmp2 = torch.sum(tmp2, dim=tuple([-1] + list(range(1, 1+n_dims)))) # [elem_batch, n_channel]
                 tmp2 *= ((-1)**(j+1)) / (2**j) 
                 tmp2 /= Ci # [elem_batch, n_channel]
@@ -200,7 +199,6 @@ class SimplexFT(Function):
                 tmp2 = tmpsum * tmp2.unsqueeze(-1).unsqueeze(-1)  # [elem_batch, j+1, n_dims]
                 
                 tmp += tmp2
-                tmp = img(tmp, deg=j)
                 ddV = coalesce_update(Ei, tmp, dV.shape)
                 dV += ddV
                 
@@ -213,9 +211,9 @@ class SimplexFT(Function):
         return dV, None, None, None, None, None, None, None
 
     
-class DDSL(nn.Module):
+class DDSL_spec(nn.Module):
     def __init__(self, res, t, j, elem_batch=100, mode='density'):
-        super(DDSL, self).__init__()
+        super(DDSL_spec, self).__init__()
         self.res = res
         self.t = t
         self.j = j
