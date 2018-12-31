@@ -27,35 +27,47 @@ def fftfreqs(res, dtype=torch.float32, exact=True):
 
     return omega
 
-# def simplex_content(V, E):
-#     """
-#     Compute the content of simplices in a simplicial complex
-#     :param V: vertex tensor. float tensor of shape (n_vertex, n_dims)
-#     :param E: element tensor. int tensor of shape (n_elem, j+1)
-#     """
-#     ne = E.shape[0] # number of elements
-#     nppe = E.shape[1] # number of points per element
-#     assert(nppe in [1, 2, 3, 4]) # points, lines, tri or tet
-#     if nppe == 1: # points
-#         return torch.ones(ne, 1, dtype=V.dtype)
-#     if nppe == 2: # lines
-#         P = V[E]
-#         Len = torch.norm(P[:, 1:] - P[:, :-1], dim=-1)
-#         return Len
-#     elif nppe == 3: # triangles
-#         E_ = torch.cat([E, E[:, 0:1]], dim=-1)
-#         P = V[E_]
-#         L = torch.norm(P[:, 1:] - P[:, :-1], dim=-1)
-#         S = torch.sum(L, dim=-1, keepdim=True) / 2
-#         Area = torch.sqrt(S*(S-L[:, 0:1])*(S-L[:, 1:2])*(S-L[:, 2:])) # Heron's Formula
-#         return Area
-#     elif nppe == 4: # tetrahedron
-#         P = V[E]
-#         Va = P[:, 1] - P[:, 0]
-#         Vb = P[:, 2] - P[:, 0]
-#         Vc = P[:, 3] - P[:, 0]
-#         Vol = torch.abs(torch.einsum('ab,ab->a', (Va, torch.cross(Vb, Vc, dim=-1))) / 6).unsqueeze(dim=-1)
-#         return Vol
+def construct_B(V, E):
+    """
+    Construct B matrix for Cayley-Menger Determinant
+    :param V: vertex tensor. float tensor of shape (n_vertex, n_dims)
+    :param E: element tensor. int tensor of shape (n_elem, j+1)
+    :return: B: B matrix of shape (n_elem, j+2, j+2)
+    """
+    ne = E.shape[0]
+    j = E.shape[1]-1
+    P = V[E]
+    
+    B = torch.zeros(ne, j+2, j+2, device=V.device, dtype=V.dtype)
+    B[:, :, 0] = 1
+    B[:, 0, :] = 1
+    for r in range(1, j+2):
+        for c in range(r+1, j+2):
+            B[:, r, c] = torch.sum((P[:, r-1] - P[:, c-1]) ** 2, dim=-1)
+            B[:, c, r] = B[:, r, c]
+    B[:, 0, 0] = 0
+    
+    return B
+
+def construct_B_batch(P):
+    """
+    Construct B matrix for Cayley-Menger Determinant from P (i.e., V[E]) matrix
+    :param P: point tensor. float tensor of shape (n_elem, j+1, n_dims)
+    :return: B: B matrix of shape (n_elem, j+2, j+2)
+    """
+    ne = P.shape[0]
+    j = P.shape[1]-1
+    
+    B = torch.zeros(ne, j+2, j+2, device=P.device, dtype=P.dtype)
+    B[:, :, 0] = 1
+    B[:, 0, :] = 1
+    for r in range(1, j+2):
+        for c in range(r+1, j+2):
+            B[:, r, c] = torch.sum((P[:, r-1] - P[:, c-1]) ** 2, dim=-1)
+            B[:, c, r] = B[:, r, c]
+    B[:, 0, 0] = 0
+    
+    return B
 
 def simplex_content(V, E, signed=False):
     """
@@ -70,15 +82,7 @@ def simplex_content(V, E, signed=False):
     j = E.shape[1]-1
     P = V[E]
     if not signed:
-        # construct Cayley-Menger matrix
-        B = torch.zeros(ne, j+2, j+2, device=V.device, dtype=V.dtype)
-        B[:, :, 0] = 1
-        B[:, 0, :] = 1
-        for r in range(1, j+2):
-            for c in range(r+1, j+2):
-                B[:, r, c] = torch.sum((P[:, r-1] - P[:, c-1]) ** 2, dim=-1)
-                B[:, c, r] = B[:, r, c]
-        B[:, 0, 0] = 0
+        B = construct_B(V, E) # construct Cayley-Menger matrix
         vol2 = (-1)**(j+1) / (2**j) / (factorial(j)**2) * batch_det(B)
         neg_mask = torch.sum(vol2 < 0)
         if torch.sum(neg_mask) > 0:
@@ -92,15 +96,6 @@ def simplex_content(V, E, signed=False):
         vol = batch_det(mat) / factorial(j)
 
     return vol.unsqueeze(-1)
-
-def triangulate_interior(V, E):
-    """
-    Triangulate/tetrahedronize interior of shape given boundary simplex mesh
-    :param V: vertex tensor. float tensor of shape (n_vertex, n_dims)
-    :param E: element tensor. int tensor of shape (n_elem, j)
-    :return: new_E: new element matrix of shape (n_elem, j+1)
-    """
-    return new_E
 
 def permute_seq(i, len):
     """
@@ -126,9 +121,9 @@ def coalesce_update(update_ind, update_val, output_shape):
     ind = torch.stack([rid, cid], dim=0)
     val = update_val.view(-1)
     if update_val.dtype is torch.float32:
-        update_val_coalesced = torch.sparse.FloatTensor(ind, val, output_shape, device=dev).coalesce().to_dense()
+        update_val_coalesced = torch.sparse.FloatTensor(ind, val, output_shape).coalesce().to_dense()
     elif update_val.dtype is torch.float64:
-        update_val_coalesced = torch.sparse.DoubleTensor(ind, val, output_shape, device=dev).coalesce().to_dense()
+        update_val_coalesced = torch.sparse.DoubleTensor(ind, val, output_shape).coalesce().to_dense()
     else:
         print("ERROR: Unsupported data type {}, must be torch.float32 or torch.float64.".format(update_val.dtype))
     return update_val_coalesced
@@ -171,3 +166,19 @@ def batch_adjugate(A):
 
     return A_inv * A_det
 
+def img(x, deg=1): # imaginary of tensor (assume last dim: real/imag)
+    """
+    multiply tensor x by i ** deg
+    """
+    deg %= 4
+    if deg == 0:
+        res = x
+    elif deg == 1:
+        res = x[..., [1, 0]]
+        res[..., 0] = -res[..., 0]
+    elif deg == 2:
+        res = -x
+    elif deg == 3:
+        res = x[..., [1, 0]]
+        res[..., 1] = -res[..., 1]
+    return res
