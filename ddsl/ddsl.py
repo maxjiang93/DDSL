@@ -205,6 +205,9 @@ class SimplexFT(Function):
             if mode == "density":
                 dV *= res[0] ** j
                 
+            if ctx.subdim:
+                dV = dV[:-1]
+                
         else:
             dV = None
             
