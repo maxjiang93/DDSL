@@ -224,3 +224,37 @@ class DDSL_spec(nn.Module):
         self.mode = mode
     def forward(self, V, E, D):
         return SimplexFT.apply(V,E,D,self.res,self.t,self.j,self.elem_batch,self.mode)
+
+    
+class DDSL_phys(nn.Module):
+    def __init__(self, res, t, j, smoothing=None, sig=1.0, elem_batch=100, mode='density'):
+        super(DDSL_phys, self).__init__()
+        self.res = res
+        self.t = t
+        self.j = j
+        self.elem_batch = elem_batch
+        self.mode = mode
+        self.filter = None
+        self.sig = sig
+        if isinstance(smoothing, str):
+            assert(smoothing in ["gaussian"])
+            if smoothing == 'gaussian':
+                self.filter = self._gaussian_filter()
+    def forward(self, V, E, D):
+        F = SimplexFT.apply(V,E,D,self.res,self.t,self.j,self.elem_batch,self.mode)
+        if self.filter is not None:
+            self.filter = self.filter.to(F.device)
+            F *= self.filter # [dim0, dim1, dim2, n_channel, 2]
+        dim = len(self.res)
+        F = F.permute(*([dim] + list(range(dim)) + [dim+1])) # [n_channel, dim0, dim1, dim2, 2]
+        f = torch.irfft(F, dim, signal_sizes=self.res)
+        return f
+    
+    def _gaussian_filter(self):
+        # frequency tensor
+        omega = fftfreqs(self.res, dtype=torch.float64) # [dim0, dim1, dim2, d]
+        dis = torch.sqrt(torch.sum(omega ** 2, dim=-1))
+        filter_ = torch.exp(-0.5*((self.sig*2*dis/self.res[0])**2)).unsqueeze(-1).unsqueeze(-1)
+        filter_.requires_grad = False
+        return filter_
+        
