@@ -13,7 +13,7 @@ class SimplexFT(Function):
     :param V: vertex tensor. float tensor of shape (n_vertex, n_dims)
     :param E: element tensor. int tensor of shape (n_elem, j or j+1)
               if j cols, triangulate/tetrahedronize interior first.
-    :param D: int ndarray of shape (n_vertex, n_channel)
+    :param D: int ndarray of shape (n_elem, n_channel)
     :param res: n_dims int tuple of number of frequency modes
     :param t: n_dims tuple of period in each dimension
     :param j: dimension of simplex set
@@ -215,7 +215,17 @@ class SimplexFT(Function):
 
     
 class DDSL_spec(nn.Module):
+    """
+    Module for DDSL layer. Takes in a simplex mesh and returns the spectral raster.
+    """
     def __init__(self, res, t, j, elem_batch=100, mode='density'):
+        """
+        :param res: n_dims int tuple of number of frequency modes
+        :param t: n_dims tuple of period in each dimension
+        :param j: dimension of simplex set
+        :param: elem_batch: element-wise batch size.
+        :param: mode: 'density' for density conserving, or 'mass' for mess conserving. Defaults 'density'
+        """
         super(DDSL_spec, self).__init__()
         self.res = res
         self.t = t
@@ -223,11 +233,31 @@ class DDSL_spec(nn.Module):
         self.elem_batch = elem_batch
         self.mode = mode
     def forward(self, V, E, D):
+        """
+        :param V: vertex tensor. float tensor of shape (n_vertex, n_dims)
+        :param E: element tensor. int tensor of shape (n_elem, j or j+1)
+                  if j cols, triangulate/tetrahedronize interior first.
+        :param D: int ndarray of shape (n_elem, n_channel)
+        :return F: ndarray of shape (res[0], res[1], ..., res[-1]/2, n_channel) 
+                   last dimension is halfed since the signal is assumed to be real
+        """
         return SimplexFT.apply(V,E,D,self.res,self.t,self.j,self.elem_batch,self.mode)
 
     
 class DDSL_phys(nn.Module):
-    def __init__(self, res, t, j, smoothing=None, sig=1.0, elem_batch=100, mode='density'):
+    """
+    Module for DDSL layer. Takes in a simplex mesh and returns a dealiased raster image (in physical domain).
+    """
+    def __init__(self, res, t, j, smoothing='gaussian', sig=2.0, elem_batch=100, mode='density'):
+        """
+        :param res: n_dims int tuple of number of frequency modes
+        :param t: n_dims tuple of period in each dimension
+        :param j: dimension of simplex set
+        :param smoothing: str, choice of spectral smoothing function. Defaults 'gaussian'
+        :param sig: sigma of gaussian at highest frequency
+        :param: elem_batch: element-wise batch size.
+        :param: mode: 'density' for density conserving, or 'mass' for mess conserving. Defaults 'density'
+        """
         super(DDSL_phys, self).__init__()
         self.res = res
         self.t = t
@@ -241,6 +271,13 @@ class DDSL_phys(nn.Module):
             if smoothing == 'gaussian':
                 self.filter = self._gaussian_filter()
     def forward(self, V, E, D):
+        """
+        :param V: vertex tensor. float tensor of shape (n_vertex, n_dims)
+        :param E: element tensor. int tensor of shape (n_elem, j or j+1)
+                  if j cols, triangulate/tetrahedronize interior first.
+        :param D: int ndarray of shape (n_elem, n_channel)
+        :return f: dealiased raster image in physical domain of shape (res[0], res[1], ..., res[-1], n_channel)
+        """
         F = SimplexFT.apply(V,E,D,self.res,self.t,self.j,self.elem_batch,self.mode)
         if self.filter is not None:
             self.filter = self.filter.to(F.device)
@@ -251,7 +288,6 @@ class DDSL_phys(nn.Module):
         return f
     
     def _gaussian_filter(self):
-        # frequency tensor
         omega = fftfreqs(self.res, dtype=torch.float64) # [dim0, dim1, dim2, d]
         dis = torch.sqrt(torch.sum(omega ** 2, dim=-1))
         filter_ = torch.exp(-0.5*((self.sig*2*dis/self.res[0])**2)).unsqueeze(-1).unsqueeze(-1)
