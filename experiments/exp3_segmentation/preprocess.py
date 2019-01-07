@@ -77,7 +77,11 @@ def main():
         pbar = tqdm(total=len(infiles))
 
     for ifile, ofile in zip(infiles, outfiles):
-        process_one(ifile, ofile, res=args.res)
+        if not os.path.exists(ofile):
+            try:
+                process_one(ifile, ofile, res=args.res)
+            except:
+                print("Failed to process {}".format(ifile))
         if not args.no_prog_bar:
             pbar.update(1)
 

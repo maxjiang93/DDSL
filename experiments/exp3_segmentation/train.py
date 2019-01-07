@@ -72,14 +72,19 @@ def masked_miou(output_raster, target_raster):
     union = ((output_mask == 1) + (target_mask == 1)).ge(1).sum().item()
     return intersect / union
 
-def compose_masked_img(polygon_raster, input):
+def compose_masked_img(polygon_raster, input, mean, std):
     """
     compose masked image for visualization
     :param polygon_raster: shape [N, res, res]
     :param input: shape [N, 3, res, res]
+    :param mean: mean for denormalizing image
+    :param std: std for denormalizing image
     """
     dtype = input.dtype
     device = input.device
+    img_mean = torch.tensor(mean, dtype=dtype, device=device).unsqueeze(-1).unsqueeze(-1)
+    img_std  = torch.tensor(std , dtype=dtype, device=device).unsqueeze(-1).unsqueeze(-1)
+    input = (input * img_std ) + img_mean
     polyraster = torch.clamp(polygon_raster.float(), 0, 1)
     red_mask = (polyraster.unsqueeze(-1) * torch.tensor([1, 0, 0], dtype=dtype, device=device)).permute(0, 3, 1, 2)
     composed_img = torch.clamp(red_mask * 0.5 + input, 0, 1)
@@ -122,10 +127,10 @@ def train(args, model, loader, criterion, optimizer, epoch, device, logger, writ
         losses.update(loss, n)
 
         # update TensorboardX
-        writer.add_scalar('training/loss', losses.avg, args.TRAIN_GLOB_STEP)
-        writer.add_scalar('training/miou', mious.avg, args.TRAIN_GLOB_STEP)
-        writer.add_scalar('training/batch_time', batch_time.avg, args.TRAIN_GLOB_STEP)
-        writer.add_scalar('training/data_time', data_time.avg, args.TRAIN_GLOB_STEP)
+        writer.add_scalar('training/loss', losses.val, args.TRAIN_GLOB_STEP)
+        writer.add_scalar('training/miou', mious.val, args.TRAIN_GLOB_STEP)
+        writer.add_scalar('training/batch_time', batch_time.val, args.TRAIN_GLOB_STEP)
+        writer.add_scalar('training/data_time', data_time.val, args.TRAIN_GLOB_STEP)
 
         if batch_idx % args.log_interval == 0:
             log_text = ('Train Epoch: [{0}][{1}/{2}]\t'
@@ -137,8 +142,8 @@ def train(args, model, loader, criterion, optimizer, epoch, device, logger, writ
                          data_time=data_time, loss=losses, miou=mious)
             logger.info(log_text)
             # update TensorboardX
-            compimg = compose_masked_img(output_raster, input)
-            imgrid = vutils.make_grid(compimg, normalize=False, scale_each=False)
+            compimg = compose_masked_img(output_raster, input, args.img_mean, args.img_std)
+            imgrid = vutils.make_grid(compimg, normalize=True, scale_each=True)
             writer.add_image('training/predictions', imgrid, args.TRAIN_GLOB_STEP)
             writer.add_text('training/text_log', log_text, args.TRAIN_GLOB_STEP)
 
@@ -186,7 +191,7 @@ def validate(args, model, loader, criterion, epoch, device, logger, writer):
         logger.info(log_text)
 
         # update TensorboardX
-        compimg = compose_masked_img(output_raster, input)
+        compimg = compose_masked_img(output_raster, input, args.img_mean, args.img_std)
         imgrid = vutils.make_grid(compimg, normalize=False, scale_each=False)
         writer.add_image('validation/predictions', imgrid, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/loss', losses.avg, args.VAL_GLOB_STEP)
@@ -246,8 +251,10 @@ def main():
     writer = SummaryWriter(log_dir=args.tblogdir)
 
     # get training / valid sets
-    normalize = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    args.img_mean = [0.485, 0.456, 0.406]
+    args.img_std = [0.229, 0.224, 0.225]
+    normalize = torchvision.transforms.Normalize(mean=args.img_mean,
+                                                  std=args.img_std)
     # DO NOT include horizontal and vertical flips in the composed transforms!
     transform = torchvision.transforms.Compose([
             torchvision.transforms.ColorJitter(hue=.1, saturation=.1),
@@ -305,7 +312,7 @@ def main():
         save_checkpoint({
         'epoch': epoch,
         'state_dict': model.state_dict(),
-        'best_miou': best_miou,
+        'best_miou': args.best_miou,
         'optimizer': optimizer.state_dict(),
         }, is_best, epoch, checkpoint_path, "_polygonnet", logger)
 
