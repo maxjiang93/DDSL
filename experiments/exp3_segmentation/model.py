@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.nn.parameter import Parameter
 import torchvision.models as models
 import sys; sys.path.append("../../ddsl")
 from ddsl import DDSL_phys
@@ -29,9 +30,9 @@ class BatchedRasterLoss2D(nn.Module):
         f = torch.stack(tuple([self.ddsl(V[i], self.E, self.D).squeeze(-1) for i in range(b)]), dim=0) # [N, res, res]
         # loss
         if self.loss == 'l1':
-            l = torch.mean(torch.abs(f-f_target))
+            l = torch.mean(torch.abs(f-f_target), dim=(1,2))
         elif self.loss == 'l2':
-            l = torch.mean((f-f_target)**2)
+            l = torch.mean((f-f_target)**2, dim=(1,2))
         if not self.return_raster:
             return l
         else:
@@ -116,3 +117,109 @@ class PolygonNet(nn.Module):
         x = x.permute(0, 2, 1).double()
         x += self.offsets
         return x
+
+
+# NEW ARCHITECTURE
+
+class DecodeLeaf(nn.Module):
+    def __init__(self, in_channel):
+        """
+        :param in_channel: input planes
+        """
+        super(DecodeLeaf, self).__init__()
+        self.in_channel = in_channel
+        self.conv1x1 = nn.Conv1d(in_channel, 1, 1, 1, 0)
+        self.scale = Parameter(0.5*torch.ones(1))
+
+    def forward(self, x):
+        """
+        :param x: tensor of shape (N, C, L)
+        :return tensor of shape (N, L)
+        """
+        x = self.conv1x1(x).squeeze(1) # (N, L)
+        x = self.scale * 0.5 * torch.tanh(x)
+        return x
+
+class PolygonNet2(nn.Module):
+    def __init__(self, encoder=models.resnet50(pretrained=True), nlevels=5):
+        super(PolygonNet2, self).__init__()
+        self.base = 256
+        self.nlevels = nlevels
+        self.npoints = 3+3*(2**nlevels-1)
+        self.encoder = nn.Sequential(*list(encoder.children())[:-1])
+        self.projection = nn.Sequential(
+            nn.Linear(2048, 3*self.base),
+            nn.ReLU()
+            )
+        # output of encoder (after projection and reshape) is  [N, 384, 3]
+        self.decoder_stem = []
+        for i in range(self.nlevels-1):
+            c_in = int(self.base / (2**i))
+            c_out = int(self.base / (2**(i+1)))
+            self.decoder_stem.append(
+                nn.Sequential(
+                    PeriodicUpsample1D(c_in, c_out),
+                    nn.BatchNorm1d(c_out),
+                    nn.ReLU()
+                    )
+                )
+
+        self.decoder_leaf = []
+        for i in range(self.nlevels):
+            c_in = int(self.base / (2**i))
+            self.decoder_leaf.append(DecodeLeaf(c_in))
+
+        self.decoder_stem = nn.ModuleList(self.decoder_stem)
+        self.decoder_leaf = nn.ModuleList(self.decoder_leaf)
+
+        self.conv1x1 = nn.Conv1d(self.base, 2, 1, 1, 0)
+        
+        offsets = 1e-4*torch.rand(self.npoints, 2, dtype=torch.float64)
+        rot = torch.tensor([[0.0, -1.0], [1.0, 0.0]], dtype=torch.float32)
+        self.register_buffer("offsets", offsets)
+        self.register_buffer("rot", rot)
+
+    def forward(self, x):
+        """
+        :param x: [N, C, H, W], where C=3, H=W=224, input image
+        :return [N, 128, 2] segmentation polygons
+        """
+        x = self.encoder(x)
+        x = x.squeeze(-1).squeeze(-1) # [N, 2048]
+        x = self.projection(x).view(-1, self.base, 3) # [N, 256, 3]
+        base_triangle = torch.sigmoid(self.conv1x1(x).permute(0, 2, 1)) # [N, 3, 2]
+
+        stem_values = [x]
+        leaf_values = []
+        for i in range(self.nlevels-1):
+            stem_values.append(self.decoder_stem[i](stem_values[-1]))
+        for i in range(self.nlevels):    
+            leaf_values.append(self.decoder_leaf[i](stem_values[i])) # [N, 3*2**i]
+        V = self._construct_polygon(base_triangle, leaf_values)
+        V += self.offsets
+        return V
+
+    def _construct_polygon(self, base_triangle, leaf_values):
+        V = base_triangle
+        for diff in leaf_values:
+            V = self._add_resolution(V, diff)
+        V = V.double()
+        return V
+
+    def _add_resolution(self, V, diff):
+        """
+        :param V: shape [N, nv, 2]
+        :param diff: shape [N, nv]
+        """
+        N = V.shape[0]
+        nv = V.shape[1]
+        seq = list(range(1, nv)) + [0]
+        V_next = V[:, seq, :] # [N, nv, 2]
+        V_mid = (V + V_next) / 2
+        V_dir = (V_next - V) / torch.norm(V_next - V, dim=2, keepdim=True) # [N, nv, 2]
+        V_per = torch.matmul(V_dir, self.rot) # [N, nv, 2]
+        V_new = V_mid + V_per * diff.unsqueeze(-1)
+        
+        V_out = torch.stack((V, V_new), dim=2).view(N, nv*2, 2)
+        V_out = torch.clamp(V_out, 0, 0.99) # clip output value
+        return V_out
