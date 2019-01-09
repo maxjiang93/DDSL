@@ -8,7 +8,7 @@ import numpy as np
 
 
 # Process data
-def processAirfoilData(directory='../../data/airfoil_cnn'):
+def processAirfoilData(directory='data'):
     '''
     Get airfoil shape from preprocessed numpy files and CFD
     information from webscraped csv files.
@@ -29,6 +29,7 @@ def processAirfoilData(directory='../../data/airfoil_cnn'):
     Re_list=[]
     Cl_list=[]
     Cd_list=[]
+    ClCd_list=[]
     afdir_list=[]
 
     # Create a counter
@@ -43,7 +44,7 @@ def processAirfoilData(directory='../../data/airfoil_cnn'):
             afdir=root.replace(directory+'/', '') # Get folder name to get airfoil shape numpy file name
 
             # Get data from csv files
-            if 'csv' in file and '-n5.' not in file:
+            if 'csv' in file and '-n5.' not in file and 'airfoil_' not in file:
                 with open(filepath) as f:
 
                     # Read csv
@@ -60,6 +61,7 @@ def processAirfoilData(directory='../../data/airfoil_cnn'):
                         aoa_list.append(data[row][0])
                         Cl_list.append(data[row][1])
                         Cd_list.append(data[row][2])
+                        ClCd_list.append(float(data[row][1])/float(data[row][2]))
                         airfoil_list.append(airfoil_name)
                         Re_list.append(Re)
                         afdir_list.append(afdir)
@@ -74,7 +76,7 @@ def processAirfoilData(directory='../../data/airfoil_cnn'):
     print('Creating dataframe...')
 
     # Initialize dataframe
-    airfoil_df=pd.DataFrame(columns=['Name','Directory','AoA','Re','Cl','Cd'])
+    airfoil_df=pd.DataFrame(columns=['Name','Directory','AoA','Re','Cl','Cd','Cl/Cd'])
 
     # Add data lists to dataframe
     airfoil_df['Name']=airfoil_list
@@ -83,6 +85,7 @@ def processAirfoilData(directory='../../data/airfoil_cnn'):
     airfoil_df['Re']=Re_list
     airfoil_df['Cl']=Cl_list
     airfoil_df['Cd']=Cd_list
+    airfoil_df['Cl/Cd']=ClCd_list
 
     # Notify that dataframe has been created
     print('Dataframe created!')
@@ -91,7 +94,7 @@ def processAirfoilData(directory='../../data/airfoil_cnn'):
 
 
 # Fix data types in dataframe
-def fixDfDtypes(airfoil_df, datatypes=['str', 'str', 'float', 'float', 'float', 'float']):
+def fixDfDtypes(airfoil_df, datatypes=['str', 'str', 'float', 'float', 'float', 'float', 'float']):
     # Fix data types
     airfoil_df['Name']=airfoil_df['Name'].astype(datatypes[0])
     airfoil_df['Directory']=airfoil_df['Directory'].astype(datatypes[1])
@@ -99,6 +102,7 @@ def fixDfDtypes(airfoil_df, datatypes=['str', 'str', 'float', 'float', 'float', 
     airfoil_df['Re']=airfoil_df['Re'].astype(datatypes[3])
     airfoil_df['Cl']=airfoil_df['Cl'].astype(datatypes[4])
     airfoil_df['Cd']=airfoil_df['Cd'].astype(datatypes[5])
+    airfoil_df['Cl/Cd']=airfoil_df['Cl/Cd'].astype(datatypes[6])
 
     return airfoil_df
 
@@ -108,7 +112,7 @@ def normalizeData(csv_file):
     mstd_csv_file=csv_file.replace('.csv', '')+'_mean_std.csv'
 
     df=pd.read_csv(csv_file).drop('Unnamed: 0', axis=1)
-    variables=['AoA','Re','Cl','Cd']
+    variables=['AoA','Re','Cl','Cd','Cl/Cd']
     mean=df.loc[:, variables].mean()
     std=df.loc[:, variables].std()
     df.loc[:, variables]=(df.loc[:, variables]-mean)/std
@@ -126,7 +130,7 @@ airfoil_df=fixDfDtypes(airfoil_df)
 airfoil_df.dtypes
 
 # Save dataframe
-airfoil_df.to_csv('../../data/airfoil_cnn/processed-data/airfoil_data.csv')
+airfoil_df.to_csv('processed_data/airfoil_data.csv')
 
 # Create normalized data csv and save mean and standard deviation values
-normalizeData('../../data/airfoil_cnn/processed-data/airfoil_data.csv')
+normalizeData('processed_data/airfoil_data.csv')

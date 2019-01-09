@@ -1,5 +1,5 @@
 from AFNet import *
-from AFNet_dataset import *
+from airfoil_dataset import *
 
 from torch.autograd import Variable
 import torch.optim as optim
@@ -14,6 +14,11 @@ import logging
 
 import datetime
 
+from sklearn.metrics import r2_score
+
+import multiprocessing as mp
+mp.set_start_method('spawn', force=True)
+
 # Define mean squared error function
 def MSE(predicted, labels):
     return torch.mean((predicted-labels)**2, dim=0)
@@ -21,9 +26,9 @@ def MSE(predicted, labels):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='Train AFNet')
-    parser.add_argument('--bottleneck', type=int, default=10,
+    parser.add_argument('--bottleneck', type=int, default=32,
                         help='number of channels out of ResNet-50 block in AFNet (default:10)')
-    parser.add_argument('--out_ch', type=int, default=2,
+    parser.add_argument('--out_ch', type=int, default=1,
                         help='number of channels out of AFNet, i.e. number of training objectives (default:2)')
     parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
@@ -39,15 +44,15 @@ def main():
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--shape_dir', type=str, default='processed-data',
-                        help='path to shapes folder (default: processed-data)')
+    parser.add_argument('--shape-dir', type=str, default='processed_data',
+                        help='path to shapes folder (default: processed_data)')
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
-    parser.add_argument('--data_file', type=str, default="processed-data/airfoil_data.csv",
+    parser.add_argument('--data-file', type=str, default="processed_data/airfoil_data_normalized.csv",
                         help='data file containing preprocessed airfoil data (Re, Cl, Cd, names)')
-    parser.add_argument('--log_dir', type=str, default="", 
+    parser.add_argument('--log-dir', type=str, default="", 
                         help='log directory for run (default: log_<time>)')
-    parser.add_argument('--tb_log_dir', type=str, default="",
+    parser.add_argument('--tb-log-dir', type=str, default="",
                         help='log directory for Tensorboard, defaulted to same directory as logger (default: log_<date>)')
     parser.add_argument('--decay', action="store_true", help="switch to decay learning rate")
     parser.add_argument('--optim', type=str, default="adam", choices=["adam", "sgd"])
@@ -56,6 +61,9 @@ def main():
                         help='uses given checkpoint file')
 
     args = parser.parse_args()
+    
+    # Clear cuda gpu cache
+#    torch.cuda.empty_cache()
 
     # Make log directory and files
     if args.log_dir=="":
@@ -67,7 +75,7 @@ def main():
         os.mkdir(log_dir)
     shutil.copy2(__file__, os.path.join(log_dir, "script.py"))
     shutil.copy2("AFNet.py", os.path.join(log_dir, "AFNet.py"))
-#     shutil.copy2("run.sh", os.path.join(log_ssh davdir, "run.sh"))
+    shutil.copy2("run.sh", os.path.join(log_dir, "run.sh"))
 
     logger = logging.getLogger("train")
     logger.setLevel(logging.DEBUG)
@@ -84,6 +92,8 @@ def main():
     
     # Set device to use (cuda vs cpu)
     device = torch.device("cuda" if use_cuda else "cpu")
+    if use_cuda:
+        print('\nUsing Cuda.\n')
 
     # Set random seed
     torch.manual_seed(args.seed)
@@ -106,12 +116,6 @@ def main():
         print('\nUsing', torch.cuda.device_count(), 'GPUs.')
         net=nn.DataParallel(net)
     net.to(device)
-    
-    # Get checkpoint
-    if args.checkpoint!="":
-        model=torch.load(args.checkpoint)
-        net.load_state_dict(model['model'])
-        print('Using checkpoint '+args.checkpoint)
 
     # Log number of parameters
     logger.info("{} parameters in total".format(sum(x.numel() for x in net.parameters())))
@@ -121,13 +125,20 @@ def main():
         optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum)
     else:
         optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    
+    # Get checkpoint
+    if args.checkpoint!="":
+        checkpoint=torch.load(args.checkpoint)
+        net.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optim'])
+        print('Using checkpoint '+args.checkpoint)
         
     # Mean squared error loss
     criterion=nn.MSELoss()
         
     # Learning rate decay
     if args.decay:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 
     # Start Tensorboard
     if args.tb_log_dir=="":
@@ -144,19 +155,21 @@ def main():
     for epoch in range(args.epochs):
         if args.decay:
             scheduler.step()
-        running_loss=0
-        valid_running_loss=0
-        acc_valid=torch.zeros(2).float().to(device)
-        acc_train=torch.zeros(2).float().to(device)
+            
+        running_loss=0.0
+        valid_running_loss=0.0
+        acc_valid=0.0
+        acc_train=0.0
         for i, data in enumerate(validloader, 0):
             # Get inputs
             shapes=data['shape']
+            shapes=torch.cat((shapes,torch.zeros(shapes.shape[0], shapes.shape[1], 1, shapes.shape[3])), dim=2)
             shapes=torch.Tensor(shapes)
             shapes=shapes.float().to(device)
-            cfd_data=data['Re'].view(-1, 1).float().to(device)
+            cfd_data=torch.cat((data['Re'].view(-1, 1), data['aoa'].view(-1, 1)), 1).float().to(device)
 
             # Get labels
-            labels=torch.cat((data['Cl'].view(-1, 1), data['Cd'].view(-1, 1)), 1).float()
+            labels=data['Cl/Cd'].view(-1, 1).float().to(device)
             labels=labels.to(device)
 
             # Forward
@@ -164,21 +177,30 @@ def main():
             loss=criterion(outputs, labels)
 
             # Running loss
-            valid_running_loss+=loss.data.item()
+            valid_running_loss+=loss.item()
 
             # Accuracy
-            acc_valid+=MSE(outputs.data, labels.data)
+            r2=r2_score(labels.data, outputs.data)
+            acc_valid+=r2
 
+            # Write to log
+            if i%args.log_interval==0:
+                logger.info('Validation set [{}/{} ({:.0f}%)]: Loss: {:.4f}, Cl/Cd R2 score: {:.4f}\r'.format(i*len(shapes), len(validloader.dataset), 100.*i*len(shapes)/len(validloader.dataset), loss.item(), r2))
+                
         for i, data in enumerate(trainloader, 0):
             # Get inputs
             shapes=data['shape']
+            shapes=torch.cat((shapes,torch.zeros(shapes.shape[0], shapes.shape[1], 1, shapes.shape[3])), dim=2)
             shapes=torch.Tensor(shapes)
             shapes=shapes.float().to(device)
-            cfd_data=data['Re'].view(-1, 1).float().to(device)
+            cfd_data=torch.cat((data['Re'].view(-1, 1), data['aoa'].view(-1, 1)), 1).float().to(device)
 
             # Get labels
-            labels=torch.cat((data['Cl'].view(-1, 1), data['Cd'].view(-1, 1)), 1).float()
+            labels=data['Cl/Cd'].view(-1, 1).float().to(device)
             labels=labels.to(device)
+        
+            # Zero gradients
+            optimizer.zero_grad()
 
             # Forward
             outputs=net(shapes, cfd_data)
@@ -191,28 +213,29 @@ def main():
             optimizer.step()
 
             # Accuracy
-            acc_train+=MSE(outputs.data, labels.data)
+            r2=r2_score(labels.data, outputs.data)
+            acc_train+=r2
 
             # Running loss
-            running_loss+=loss.data.item()
-
+            running_loss+=loss.item()
+            
+            # Write to log
+            if i%args.log_interval==0:
+                logger.info('Train set [{}/{} ({:.0f}%)]: Loss: {:.4f}, Cl/Cd R2 score: {:.4f}\r'.format(i*len(shapes), len(trainloader.dataset), 100.*i*len(shapes)/len(trainloader.dataset), loss.item(), r2))
+            
         # Write statistics to Tensorboard
-        avg_acc_valid=acc_train/len(validloader)
         avg_acc_train=acc_train/len(trainloader)
-        train_loss=running_loss/len(trainloader.dataset)
-        valid_loss=valid_running_loss/len(validloader.dataset)
-        writer.add_scalars('data/accuracy', {'valid_cl_acc': avg_acc_valid[0],\
-                                            'valid_cd_acc': avg_acc_valid[1],\
-                                            'train_cl_acc': avg_acc_train[0],\
-                                            'train_cd_acc': avg_acc_train[1]}, epoch)
+        avg_acc_valid=acc_valid/len(validloader)
+        train_loss=running_loss/len(trainloader)
+        valid_loss=valid_running_loss/len(validloader)
+        writer.add_scalars('data/accuracy', {'valid_acc': avg_acc_valid,\
+                                            'train_acc': avg_acc_train}, epoch)
         writer.add_scalars('data/loss', {'train_loss':train_loss,\
                                          'valid_loss':valid_loss}, epoch)
         
         # Write to log
-        logger.info('Train set: Average loss: {:.4f}\r'.format(
-            train_loss))
-        logger.info('Validation set: Average loss: {:.4f}\r'.format(
-            valid_loss))
+        logger.info('[Epoch {}] Train set: Average loss: {:.4f}, Avg Cl/Cd R2 score: {:.4f}\r'.format(epoch, train_loss, avg_acc_train))
+        logger.info('[Epoch {}] Validation set: Average loss: {:.4f}, Avg Cl/Cd R2 score: {:.4f}\r'.format(epoch, valid_loss, avg_acc_valid))
 
         # Save checkpoint
         torch.save({
@@ -222,13 +245,10 @@ def main():
         }, os.path.join(log_dir,'AFNet_model.checkpoint'))
 
         # Zero statistics
-        acc_valid=torch.zeros(2).float().to(device)
-        acc_train=torch.zeros(2).float().to(device)
+        acc_valid=0.0
+        acc_train=0.0
         running_loss = 0.0
         valid_running_loss = 0.0
-
-        if epoch%5==0:
-            print('Epoch '+str(epoch)+' complete!')
 
     print('\nFinished training!')
 

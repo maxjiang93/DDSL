@@ -1,20 +1,11 @@
-from AFNet_dataset import *
+from airfoil_dataset import *
+from airfoil_NUFT import *
 import torch
 import matplotlib.pyplot as plt
 
-# Create parameterized airfoil plotter
-def plotAirfoil(af, name):
-    fig=plt.figure(figsize=(10, 5))
-    ax1=fig.add_subplot(111)
-    af=torch.irfft(torch.Tensor(af), 2)
-    im1=ax1.imshow(af, origin='lower')
-    fig.colorbar(im1)
-    ax1.set_title(name)
-    return fig
-
 # Load data
-csv_file='processed-data/airfoil_data.csv'
-shape_dir='processed-data'
+csv_file='processed_data/airfoil_data_normalized.csv'
+shape_dir='processed_data'
 
 trainset=AirfoilDataset(csv_file=csv_file, shape_dir=shape_dir, set_type='train')
 testset=AirfoilDataset(csv_file=csv_file, shape_dir=shape_dir, set_type='test')
@@ -41,12 +32,11 @@ for i in range(0, 5):
     print(testset[i]['name'])
     
 # Plot an airfoil in training set
-idx=69693
-af=trainset[idx]['shape']
+idx=103
+f=trainset[idx]['shape']
 name=trainset[idx]['name']
-aoa=trainset[idx]['aoa']
 savefile='test.png'
-plotAirfoil(af, name).savefig(savefile)
+plot_airfoil(f, name).savefig(savefile)
 print()
-print(name+' at aoa='+str(aoa)+' plotted and saved to '+savefile)
+print(name+' plotted and saved to '+savefile)
     

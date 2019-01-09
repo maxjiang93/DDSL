@@ -7,10 +7,6 @@ import csv
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-# Function for getting normalized data
-def getNormalizedData(csv_file):
-    return csv_file.replace('.csv', '')+'_normalized.csv'
-
 # Create dataset class
 class AirfoilDataset(Dataset):
     def __init__(self, csv_file, shape_dir, set_type, train_size=0.7, test_size=0.2, random_seed=0):
@@ -22,12 +18,7 @@ class AirfoilDataset(Dataset):
         
         assert (set_type in ['train', 'test', 'valid'])
         
-        orig_csv_file=csv_file
-        orig_df=pd.read_csv(orig_csv_file).drop('Unnamed: 0', axis=1)
-        
-        csv_file=getNormalizedData(csv_file)
-        
-        # Read csv
+        # Load data
         df=pd.read_csv(csv_file).drop('Unnamed: 0', axis=1)
         
         # Set random seed
@@ -41,6 +32,7 @@ class AirfoilDataset(Dataset):
         num_train=np.round(train_size*data_size).astype('int')
         num_test=np.round(test_size*data_size).astype('int')
         
+        # Split dataset
         idx=0
         if set_type=='train':
             idx=idx_arr[:num_train]
@@ -49,7 +41,6 @@ class AirfoilDataset(Dataset):
         elif set_type=='valid':
             idx=idx_arr[num_train+num_test:]
         self.airfoil_df=df.iloc[idx]
-        self.orig_df=orig_df.iloc[idx]
         
         self.shape_dir=shape_dir
         
@@ -62,19 +53,15 @@ class AirfoilDataset(Dataset):
         Re=self.airfoil_df['Re'].iloc[idx]
         Cl=self.airfoil_df['Cl'].iloc[idx]
         Cd=self.airfoil_df['Cd'].iloc[idx]
-        
-        # Get unnormalized AoA
-        orig_aoa=self.orig_df['AoA'].iloc[idx]
-        aoa=str(orig_aoa).replace('.', '_')
-        aoa='aoa_p_'+aoa
-        aoa=aoa.replace('aoa_p_-', 'aoa_n_')
+        ClCd=self.airfoil_df['Cl/Cd'].iloc[idx]
+        aoa=self.airfoil_df['AoA'].iloc[idx]
         
         # Get numpy shape file
         af_dir=self.airfoil_df['Directory'].iloc[idx]
         shape_dir=self.shape_dir
-        npyfilename=shape_dir+'/'+af_dir+'_'+aoa+'.npy'
-        shape=np.load(npyfilename)
-        shape=np.stack((np.real(shape), np.imag(shape)), axis=2)
+        npyfilename=shape_dir+'/'+af_dir+'.pt'
+        shape=torch.load(npyfilename)
+#         shape=np.stack((np.real(shape), np.imag(shape)), axis=2)
           
         # Create dictionary output
         sample={'name': name,\
@@ -82,6 +69,7 @@ class AirfoilDataset(Dataset):
                 'Re': Re,\
                 'Cl': Cl,\
                 'Cd': Cd,\
-                'aoa': orig_aoa}
+                'Cl/Cd': ClCd,\
+                'aoa': aoa}
         
         return sample
