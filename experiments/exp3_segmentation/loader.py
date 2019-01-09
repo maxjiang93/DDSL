@@ -31,7 +31,8 @@ class CityScapeLoader(Dataset):
 			infile = outfile.replace('')
 
 		target = dat['target']
-		input = PIL.Image.fromarray(np.moveaxis(dat['image'], 0, -1))			
+		input = PIL.Image.fromarray(np.moveaxis(dat['image'], 0, -1))		
+		label = dat['label_id'].astype(np.int)
 		# flip horizontal
 		if np.random.rand() < self.RandomHorizontalFlip:
 			input = F.hflip(input)
@@ -43,5 +44,6 @@ class CityScapeLoader(Dataset):
 		# final transform of input
 		input = self.transforms(input)
 		target = torch.from_numpy(target.copy()).double()
+		label = torch.from_numpy(label.copy()).long()
 
-		return input, target
+		return input, target, label

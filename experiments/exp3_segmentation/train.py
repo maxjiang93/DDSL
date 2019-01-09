@@ -11,7 +11,7 @@ import shutil, argparse, logging, sys, time, os
 from tensorboardX import SummaryWriter
 
 from loader import CityScapeLoader
-from model import BatchedRasterLoss2D, PeriodicUpsample1D, PolygonNet
+from model import BatchedRasterLoss2D, PeriodicUpsample1D, PolygonNet, PolygonNet2
 
 def initialize_logger(args):
     if not os.path.exists(args.log_dir):
@@ -47,30 +47,56 @@ class AverageMeter(object):
 
     def reset(self):
         self.val = 0
+        self.n = 0
         self.avg = 0
         self.sum = 0
         self.count = 0
 
     def update(self, val, n=1):
         self.val = val
+        self.n = n
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
 
-def masked_miou(output_raster, target_raster):
+    @property
+    def valcavg(self):
+        return self.val.sum().item() / (self.n != 0).sum().item()
+
+    @property
+    def avgcavg(self):
+        return self.avg.sum().item() / (self.count != 0).sum().item()
+    
+
+def masked_miou(output_raster, target_raster, labels, nclass):
     """
     compute masked mean-IoU score by comparing output and target rasters
     :param output_raster: shape [N, res, res]
     :param target_raster: shape [N, res, res]
+    :param labels: shape [N, res, res]
+    :param nclass: int, number of classes
+    :return [nclass] float for miou corresponding to each class
+            [nclass] int for number of counts for per class
     """
+    device = output_raster.device
+
     output_raster = torch.clamp(output_raster, 0, 1)
     target_raster = torch.clamp(target_raster, 0, 1)
     output_mask = (output_raster >= 0.5)
     target_mask = (target_raster >= 0.5)
 
-    intersect = ((output_mask == 1) + (target_mask == 1)).eq(2).sum().item()
-    union = ((output_mask == 1) + (target_mask == 1)).ge(1).sum().item()
-    return intersect / union
+    intersect = ((output_mask == 1) + (target_mask == 1)).eq(2).sum((1,2))
+    union = ((output_mask == 1) + (target_mask == 1)).ge(1).sum((1,2))
+    iou_all = (intersect.float() / union.float()).unsqueeze(-1) # [N]
+    # get per class miou score
+    labels_one_hot = torch.arange(nclass, device=device).expand(labels.shape[0], nclass) == labels.unsqueeze(-1)
+    labels_one_hot = labels_one_hot.float()
+    count_per_cls = labels_one_hot.sum(0)
+
+    miou_per_cls = torch.sum(labels_one_hot * iou_all, dim=0) / count_per_cls
+    miou_per_cls[torch.isnan(miou_per_cls)] = 0
+
+    return miou_per_cls, count_per_cls
 
 def compose_masked_img(polygon_raster, input, mean, std):
     """
@@ -99,20 +125,21 @@ def train(args, model, loader, criterion, optimizer, epoch, device, logger, writ
     data_time = AverageMeter()
 
     end = time.time()
-    for batch_idx, (input, target) in enumerate(loader):
+    for batch_idx, (input, target, label) in enumerate(loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         # compute output
         n = input.size(0)
-        input, target = input.to(device), target.to(device)
+        input, target, label = input.to(device), target.to(device), label.to(device)
         output = model(input) # output shape [N, 128, 2]
-        loss, output_raster = criterion(output, target)
+        loss_vec, output_raster = criterion(output, target)
+        loss = (loss_vec * args.weights[label]).sum()
 
         # measure miou and record loss
-        miou = masked_miou(output_raster, target)
+        miou, miou_count = masked_miou(output_raster, target, label, args.nclass)
         losses.update(loss.item(), n)
-        mious.update(miou, n)
+        mious.update(miou, miou_count)
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -128,18 +155,18 @@ def train(args, model, loader, criterion, optimizer, epoch, device, logger, writ
 
         # update TensorboardX
         writer.add_scalar('training/loss', losses.val, args.TRAIN_GLOB_STEP)
-        writer.add_scalar('training/miou', mious.val, args.TRAIN_GLOB_STEP)
         writer.add_scalar('training/batch_time', batch_time.val, args.TRAIN_GLOB_STEP)
         writer.add_scalar('training/data_time', data_time.val, args.TRAIN_GLOB_STEP)
+        writer.add_scalar('training/miou_mean', mious.valcavg, args.TRAIN_GLOB_STEP)
 
-        if batch_idx % args.log_interval == 0:
+        if args.TRAIN_GLOB_STEP % args.log_interval == 0:
             log_text = ('Train Epoch: [{0}][{1}/{2}]\t'
                         'CompTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                         'DataTime {data_time.val:.3f} ({data_time.avg:.3f})\t'
                         'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                        'mIoU {miou.val:.3f} ({miou.avg:.3f})\t').format(
+                        'mIoU {miou:.3f} ({miou:.3f})\t').format(
                          epoch, batch_idx, len(loader), batch_time=batch_time,
-                         data_time=data_time, loss=losses, miou=mious)
+                         data_time=data_time, loss=losses, miou=mious.val.mean().item())
             logger.info(log_text)
             # update TensorboardX
             compimg = compose_masked_img(output_raster, input, args.img_mean, args.img_std)
@@ -159,20 +186,21 @@ def validate(args, model, loader, criterion, epoch, device, logger, writer):
 
     with torch.no_grad():
         end = time.time()
-        for batch_idx, (input, target) in enumerate(loader):
+        for batch_idx, (input, target, label) in enumerate(loader):
             # measure data loading time
             data_time.update(time.time() - end)
 
             # compute output
             n = input.size(0)
-            input, target = input.to(device), target.to(device)
+            input, target, label = input.to(device), target.to(device), label.to(device)
             output = model(input) # output shape [N, 128, 2]
-            loss, output_raster = criterion(output, target)
+            loss_vec, output_raster = criterion(output, target)
+            loss = (loss_vec * args.weights[label]).sum()
 
             # measure miou and record loss
-            miou = masked_miou(output_raster, target)
+            miou, miou_count = masked_miou(output_raster, target, label, args.nclass)
             losses.update(loss.item(), n)
-            mious.update(miou, n)
+            mious.update(miou, miou_count)
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -185,9 +213,9 @@ def validate(args, model, loader, criterion, epoch, device, logger, writer):
                     'CompTime {batch_time.sum:.3f} ({batch_time.avg:.3f})\t'
                     'DataTime {data_time.sum:.3f} ({data_time.avg:.3f})\t'
                     'Loss {loss.avg:.4f}\t'
-                    'mIoU {miou.avg:.3f}\t').format(
+                    'mIoU {miou:.3f}\t').format(
                      epoch, batch_time=batch_time,
-                     data_time=data_time, loss=losses, miou=mious)
+                     data_time=data_time, loss=losses, miou=mious.avgcavg)
         logger.info(log_text)
 
         # update TensorboardX
@@ -195,13 +223,17 @@ def validate(args, model, loader, criterion, epoch, device, logger, writer):
         imgrid = vutils.make_grid(compimg, normalize=False, scale_each=False)
         writer.add_image('validation/predictions', imgrid, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/loss', losses.avg, args.VAL_GLOB_STEP)
-        writer.add_scalar('validation/miou', mious.avg, args.VAL_GLOB_STEP)
+        writer.add_scalar('validation/miou', mious.avgcavg, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/batch_time', batch_time.avg, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/data_time', data_time.avg, args.VAL_GLOB_STEP)
+        writer.add_scalar('validation/miou_mean', mious.avg.mean().item(), args.VAL_GLOB_STEP)
+        # update per-class miou
+        for i, name  in enumerate(args.label_names):
+            writer.add_scalar('validation/miou_' + name, mious.avg[i].item(), args.VAL_GLOB_STEP)
         writer.add_text('validation/text_log', log_text, args.VAL_GLOB_STEP)
         args.VAL_GLOB_STEP += 1
 
-    return mious.avg
+    return mious.avgcavg
 
 def main():
     # Training settings
@@ -230,8 +262,16 @@ def main():
     parser.add_argument('--timestamp', action='store_true', help="add timestamp to log_dir name")
 
     args = parser.parse_args()
+    use_cuda = not args.no_cuda and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+
     args.TRAIN_GLOB_STEP = 0
     args.VAL_GLOB_STEP = 0
+    args.label_names = ["car", "truck", "train", "bus", "motorcycle", "bicycle", "rider", "person"]
+    args.instances = torch.tensor([30246, 516, 76, 325, 658, 3307, 1872, 19563]).double().to(device)
+    args.nclass = len(args.label_names)
+    args.weights = 1 / torch.log(args.instances / args.instances.sum() + 1.02)
+    args.weights /= args.weights.sum()
 
     # PYTORCH VERSION > 1.0.0
     assert(float(torch.__version__.split('.')[-3]) > 0)
@@ -239,8 +279,6 @@ def main():
     # boiler-plate
     if args.timestamp:
         args.log_dir += '_' + time.strftime("%Y_%m_%d_%H_%M_%S")
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
     logger = initialize_logger(args)
     torch.manual_seed(args.seed)
 
@@ -268,7 +306,8 @@ def main():
     val_loader = DataLoader(valset, batch_size=args.val_batch_size, shuffle=False, drop_last=False)
     
     # initialize and parallelize model
-    model = PolygonNet()
+    # model = PolygonNet()
+    model = PolygonNet2()
     model = nn.DataParallel(model)
     model.to(device)
 
@@ -296,13 +335,13 @@ def main():
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
 
     checkpoint_path = os.path.join(args.log_dir, 'checkpoint')
-    criterion = BatchedRasterLoss2D(loss=args.loss_type, return_raster=True).to(device)
+    criterion = BatchedRasterLoss2D(npoints=model.module.npoints, loss=args.loss_type, return_raster=True).to(device)
 
     # training loop
     for epoch in range(args.start_epoch + 1, args.epochs):
         if args.decay:
             scheduler.step(epoch)
-        loss = train(args, model, train_loader, criterion, optimizer, epoch, device, logger, writer)
+        train(args, model, train_loader, criterion, optimizer, epoch, device, logger, writer)
         miou = validate(args, model, val_loader, criterion, epoch, device, logger, writer)
         if miou > args.best_miou:
             args.best_miou = miou

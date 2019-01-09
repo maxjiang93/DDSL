@@ -1,5 +1,6 @@
 #!/bin/bash
 source activate
+export CUDA_VISIBLE_DEVICES=2
 
 python train.py \
 --batch_size 48 \
@@ -10,5 +11,5 @@ python train.py \
 --seed 1 \
 --data_folder processed_data \
 --log_interval 20 \
---log_dir logs/run1 \
+--log_dir logs/net2_new_new \
 --timestamp
