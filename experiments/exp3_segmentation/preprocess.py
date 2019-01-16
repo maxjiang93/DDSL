@@ -33,21 +33,38 @@ def convert_ddsl(V, res=224):
     f = ddsl(V, E, D)
     return f.squeeze().detach().cpu().numpy()
 
-def process_one(infile, outfile, res=224):
+def process_one(infile, outfile, res=224, mres=False):
+    def adjust(f):
+        # check orientation
+        if np.absolute(f.max()) < np.absolute(f.min()):
+            f = -f
+        return f.T
+
     dat = np.load(infile)
     V = dat['poly']
     # check poly within [0,1)
     assert(V.min() >= 0 and V.max() < 1)
-    f = convert_ddsl(V, res=res)
-    # check orientation
-    if np.absolute(f.max()) < np.absolute(f.min()):
-        f = -f
-    f = f.T
-    save_dict = {'image': dat['image'],
-                 'label': dat['label'],
-                 'label_id': mapping[str(dat['label'])],
-                 'target' : f,
-                 'img_path': dat['img_path']}
+    f = adjust(convert_ddsl(V, res=res))
+    
+    if mres:
+        f_2 = adjust(convert_ddsl(V, res=int(res/2)))
+        f_4 = adjust(convert_ddsl(V, res=int(res/4)))
+        f_8 = adjust(convert_ddsl(V, res=int(res/8)))
+        save_dict = {'image': dat['image'],
+                     'label': dat['label'],
+                     'label_id': mapping[str(dat['label'])],
+                     'target' : f,
+                     'target_2': f_2,
+                     'target_4': f_4,
+                     'target_8': f_8,
+                     'img_path': dat['img_path']}
+    else:
+        save_dict = {'image': dat['image'],
+                     'label': dat['label'],
+                     'label_id': mapping[str(dat['label'])],
+                     'target' : f,
+                     'img_path': dat['img_path']}
+
     np.savez_compressed(outfile, **save_dict)
 
 def main():
@@ -57,6 +74,7 @@ def main():
     parser.add_argument('--out_dir', type=str, default="../../data/processed_data", metavar='O', help="output directory")
     parser.add_argument('--res', type=int, default=224, metavar='R', help="raster resolution")
     parser.add_argument('--no_prog_bar', action='store_true', help="disable progress bar.")
+    parser.add_argument('--multires', action='store_true', help="multiresolution target mask.")
 
     args = parser.parse_args()
 
@@ -79,7 +97,7 @@ def main():
     for ifile, ofile in zip(infiles, outfiles):
         if not os.path.exists(ofile):
             try:
-                process_one(ifile, ofile, res=args.res)
+                process_one(ifile, ofile, res=args.res, mres=args.multires)
             except:
                 print("Failed to process {}".format(ifile))
         if not args.no_prog_bar:

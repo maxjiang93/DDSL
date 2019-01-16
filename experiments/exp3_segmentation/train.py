@@ -11,7 +11,7 @@ import shutil, argparse, logging, sys, time, os
 from tensorboardX import SummaryWriter
 
 from loader import CityScapeLoader
-from model import BatchedRasterLoss2D, PeriodicUpsample1D, PolygonNet, PolygonNet2
+from model import BatchedRasterLoss2D, PeriodicUpsample1D, PolygonNet, PolygonNet2, SmoothnessLoss, PolygonNet3
 
 def initialize_logger(args):
     if not os.path.exists(args.log_dir):
@@ -33,7 +33,9 @@ def initialize_logger(args):
 
 def save_checkpoint(state, is_best, epoch, output_folder, filename, logger):
     if epoch > 0:
-        os.remove(output_folder + filename + '_%03d' % (epoch-1) + '.pth.tar')
+        prev_file = output_folder + filename + '_%03d' % (epoch-1) + '.pth.tar'
+        if os.path.exists(prev_file):
+            os.remove(output_folder + filename + '_%03d' % (epoch-1) + '.pth.tar')
     torch.save(state, output_folder + filename + '_%03d' % epoch + '.pth.tar')
     if is_best:
         logger.info("Saving new best model")
@@ -98,10 +100,11 @@ def masked_miou(output_raster, target_raster, labels, nclass):
 
     return miou_per_cls, count_per_cls
 
-def compose_masked_img(polygon_raster, input, mean, std):
+def compose_masked_img(predict, target, input, mean, std):
     """
     compose masked image for visualization
-    :param polygon_raster: shape [N, res, res]
+    :param predict: shape [N, res, res]
+    :param target: shape [N, res, res]
     :param input: shape [N, 3, res, res]
     :param mean: mean for denormalizing image
     :param std: std for denormalizing image
@@ -111,75 +114,115 @@ def compose_masked_img(polygon_raster, input, mean, std):
     img_mean = torch.tensor(mean, dtype=dtype, device=device).unsqueeze(-1).unsqueeze(-1)
     img_std  = torch.tensor(std , dtype=dtype, device=device).unsqueeze(-1).unsqueeze(-1)
     input = (input * img_std ) + img_mean
-    polyraster = torch.clamp(polygon_raster.float(), 0, 1)
-    red_mask = (polyraster.unsqueeze(-1) * torch.tensor([1, 0, 0], dtype=dtype, device=device)).permute(0, 3, 1, 2)
-    composed_img = torch.clamp(red_mask * 0.5 + input, 0, 1)
+    pred = torch.clamp(predict.float(), 0, 1)
+    targ = torch.clamp(target.float(), 0, 1)
+    red_mask = (pred.unsqueeze(-1) * torch.tensor([1, 0, 0], dtype=dtype, device=device)).permute(0, 3, 1, 2)
+    blu_mask = (targ.unsqueeze(-1) * torch.tensor([0, 0, 1], dtype=dtype, device=device)).permute(0, 3, 1, 2)
+    composed_img = torch.clamp(red_mask * 0.5 + blu_mask * 0.5 + input, 0, 1)
     return composed_img
 
-def train(args, model, loader, criterion, optimizer, epoch, device, logger, writer):
+def train(args, model, loader, criterion, criterion_smooth, optimizer, epoch, device, logger, writer):
     model.train()
-
-    losses = AverageMeter()
+    
+    rasterlosses = [AverageMeter() for _ in range(len(args.res))]
+    smoothloss = AverageMeter()
+    losses_sum = AverageMeter()
     mious = AverageMeter()
     batch_time = AverageMeter()
     data_time = AverageMeter()
+    time0 = time.time()
 
     end = time.time()
     for batch_idx, (input, target, label) in enumerate(loader):
-        # measure data loading time
-        data_time.update(time.time() - end)
+        with torch.autograd.detect_anomaly():
+            # measure data loading time
+            data_time.update(time.time() - end)
 
-        # compute output
-        n = input.size(0)
-        input, target, label = input.to(device), target.to(device), label.to(device)
-        output = model(input) # output shape [N, 128, 2]
-        loss_vec, output_raster = criterion(output, target)
-        loss = (loss_vec * args.weights[label]).sum()
+            # compute output
+            num = input.size(0)
+            input, label = input.to(device), label.to(device)
+            target = [t.to(device) for t in target]
 
-        # measure miou and record loss
-        miou, miou_count = masked_miou(output_raster, target, label, args.nclass)
-        losses.update(loss.item(), n)
-        mious.update(miou, miou_count)
+            output = model(input) # output shape [N, 128, 2]
+        
+            evals = [crit(output[:, ::l], t) for crit, l, t in zip(criterion, args.levels, target)]
+            loss_vecs = [e[0] for e in evals]
+            output_rasters = [e[1] for e in evals]
+            rasterlosses_ = [(lv * args.weights[label]).sum() for lv in loss_vecs]
 
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            rasterloss = torch.sum(torch.stack(rasterlosses_, dim=0), dim=0)
+            output_raster = output_rasters[0]
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+            # compute smoothness loss
+            smoothloss_ = criterion_smooth(output)
+            smoothloss_ = (smoothloss_).mean()
 
-        # update statistics
-        losses.update(loss, n)
+            loss = rasterloss + args.smooth_loss * smoothloss_
 
-        # update TensorboardX
-        writer.add_scalar('training/loss', losses.val, args.TRAIN_GLOB_STEP)
-        writer.add_scalar('training/batch_time', batch_time.val, args.TRAIN_GLOB_STEP)
-        writer.add_scalar('training/data_time', data_time.val, args.TRAIN_GLOB_STEP)
-        writer.add_scalar('training/miou_mean', mious.valcavg, args.TRAIN_GLOB_STEP)
+            # measure miou and record loss
+            miou, miou_count = masked_miou(output_raster, target[0], label, args.nclass)
 
-        if args.TRAIN_GLOB_STEP % args.log_interval == 0:
-            log_text = ('Train Epoch: [{0}][{1}/{2}]\t'
-                        'CompTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                        'DataTime {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                        'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                        'mIoU {miou:.3f} ({miou:.3f})\t').format(
-                         epoch, batch_idx, len(loader), batch_time=batch_time,
-                         data_time=data_time, loss=losses, miou=mious.val.mean().item())
-            logger.info(log_text)
-            # update TensorboardX
-            compimg = compose_masked_img(output_raster, input, args.img_mean, args.img_std)
-            imgrid = vutils.make_grid(compimg, normalize=True, scale_each=True)
-            writer.add_image('training/predictions', imgrid, args.TRAIN_GLOB_STEP)
-            writer.add_text('training/text_log', log_text, args.TRAIN_GLOB_STEP)
+            # compute gradient and do optimizer step
+            optimizer.zero_grad()
+            loss.backward()
+            for name, p in model.named_parameters():
+                # catch NaNs
+                if torch.isnan(torch.sum(p.grad.data)).item():
+                    p.grad.data[p.grad.data!=p.grad.data] = 0
+                    logger.info("[!] Clamping NaN in gradient of {}".format(name))
+                # clamp grad
+                p.grad.data.clamp_(max=1)
+            optimizer.step()
 
-        args.TRAIN_GLOB_STEP += 1
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
 
-def validate(args, model, loader, criterion, epoch, device, logger, writer):
+            # update statistics
+            for i in range(len(args.res)):
+                rasterlosses[i].update(rasterlosses_[i].item())
+            smoothloss.update(smoothloss_)
+            mious.update(miou, miou_count)
+            losses_sum.update(loss.item(), num)
+
+            if args.TRAIN_GLOB_STEP % args.log_interval == 0:
+                log_text = ('Train Epoch: [{0}][{1}/{2}]\t'
+                            'CompTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                            'DataTime {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                            'RasLoss@[224/112/56/28] {rl[0].val:.4f}/{rl[1].val:.4f}/{rl[2].val:.4f}/{rl[3].val:.4f}\t'
+                            'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                            'mIoU {miou:.3f} ({miou:.3f})\t').format(
+                             epoch, batch_idx, len(loader), batch_time=batch_time,
+                             data_time=data_time, loss=losses_sum, miou=mious.val.mean().item(), rl=rasterlosses)
+                logger.info(log_text)
+                # # update TensorboardX
+                # compimg = compose_masked_img(output_raster, target[0], input, args.img_mean, args.img_std)
+                # imgrid = vutils.make_grid(compimg, normalize=True, scale_each=True)
+                # writer.add_image('training/predictions', imgrid, args.TRAIN_GLOB_STEP)
+                # writer.add_text('training/text_log', log_text, args.TRAIN_GLOB_STEP)
+
+                # writer.add_scalar('training/batch_time', batch_time.val, args.TRAIN_GLOB_STEP)
+                # writer.add_scalar('training/data_time', data_time.val, args.TRAIN_GLOB_STEP)
+                # writer.add_scalar('training/miou_mean', mious.valcavg, args.TRAIN_GLOB_STEP)
+                # for i, r in enumerate(args.res):
+                #     writer.add_scalar('training/rasterloss@'+str(r), rasterlosses[i].val, args.TRAIN_GLOB_STEP)
+                # writer.add_scalar('training/smoothloss', smoothloss.val, args.TRAIN_GLOB_STEP)
+                # writer.add_scalar('training/totalloss', losses_sum.val, args.TRAIN_GLOB_STEP)
+
+            # DEBUG
+            if mious.valcavg == 0:
+                print("DEBUG: Printing vertices for 0 mIoU")
+                print(output[0])
+
+            args.TRAIN_GLOB_STEP += 1
+    logger.info("Total Time per Epoch: {} min".format((time.time() - time0)/60))
+
+def validate(args, model, loader, criterion, criterion_smooth, epoch, device, logger, writer):
     model.eval()
 
-    losses = AverageMeter()
+    rasterlosses = [AverageMeter() for _ in range(len(args.res))]
+    smoothloss = AverageMeter()
+    losses_sum = AverageMeter()
     mious = AverageMeter()
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -191,42 +234,61 @@ def validate(args, model, loader, criterion, epoch, device, logger, writer):
             data_time.update(time.time() - end)
 
             # compute output
-            n = input.size(0)
-            input, target, label = input.to(device), target.to(device), label.to(device)
+            num = input.size(0)
+            input, label = input.to(device), label.to(device)
+            target = [t.to(device) for t in target]
             output = model(input) # output shape [N, 128, 2]
-            loss_vec, output_raster = criterion(output, target)
-            loss = (loss_vec * args.weights[label]).sum()
+
+            evals = [crit(output[:, ::l], t) for crit, l, t in zip(criterion, args.levels, target)]
+            loss_vecs = [e[0] for e in evals]
+            output_rasters = [e[1] for e in evals]
+            rasterlosses_ = [(lv * args.weights[label]).sum() for lv in loss_vecs]
+
+            rasterloss = torch.sum(torch.stack(rasterlosses_, dim=0), dim=0)
+            output_raster = output_rasters[0]
+
+            # compute smoothness loss
+            smoothloss_ = criterion_smooth(output)
+            smoothloss_ = (smoothloss_).mean()
+
+            loss = rasterloss + args.smooth_loss * smoothloss_
 
             # measure miou and record loss
-            miou, miou_count = masked_miou(output_raster, target, label, args.nclass)
-            losses.update(loss.item(), n)
-            mious.update(miou, miou_count)
+            miou, miou_count = masked_miou(output_raster, target[0], label, args.nclass)
 
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
 
             # update statistics
-            losses.update(loss, n)
+            for i in range(len(args.res)):
+                rasterlosses[i].update(rasterlosses_[i].item())
+            smoothloss.update(smoothloss_)
+            mious.update(miou, miou_count)
+            losses_sum.update(rasterloss.item(), num)
 
+        bmiou = max(args.best_miou, mious.avgcavg)
         log_text = ('Valid Epoch: [{0}]\t'
                     'CompTime {batch_time.sum:.3f} ({batch_time.avg:.3f})\t'
                     'DataTime {data_time.sum:.3f} ({data_time.avg:.3f})\t'
                     'Loss {loss.avg:.4f}\t'
-                    'mIoU {miou:.3f}\t').format(
+                    'mIoU {miou:.3f} (best {bmiou:.3f})\t').format(
                      epoch, batch_time=batch_time,
-                     data_time=data_time, loss=losses, miou=mious.avgcavg)
+                     data_time=data_time, loss=losses_sum, miou=mious.avgcavg, bmiou=bmiou)
         logger.info(log_text)
 
         # update TensorboardX
-        compimg = compose_masked_img(output_raster, input, args.img_mean, args.img_std)
+        compimg = compose_masked_img(output_raster, target[0], input, args.img_mean, args.img_std)
         imgrid = vutils.make_grid(compimg, normalize=False, scale_each=False)
         writer.add_image('validation/predictions', imgrid, args.VAL_GLOB_STEP)
-        writer.add_scalar('validation/loss', losses.avg, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/miou', mious.avgcavg, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/batch_time', batch_time.avg, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/data_time', data_time.avg, args.VAL_GLOB_STEP)
         writer.add_scalar('validation/miou_mean', mious.avg.mean().item(), args.VAL_GLOB_STEP)
+        for i, r in enumerate(args.res):
+            writer.add_scalar('validation/rasterloss@'+str(r), rasterlosses[i].avg, args.VAL_GLOB_STEP)
+        writer.add_scalar('validation/smoothloss', smoothloss.avg, args.VAL_GLOB_STEP)
+        writer.add_scalar('validation/totalloss', losses_sum.avg, args.VAL_GLOB_STEP)
         # update per-class miou
         for i, name  in enumerate(args.label_names):
             writer.add_scalar('validation/miou_' + name, mious.avg[i].item(), args.VAL_GLOB_STEP)
@@ -243,6 +305,10 @@ def main():
     parser.add_argument('--val_batch_size', type=int, default=32, metavar='N',
                         help='input batch size for validation (default: 32)')
     parser.add_argument('--loss_type', type=str, choices=['l1', 'l2'], default='l1', help='type of loss for raster loss computation')
+    parser.add_argument('--decay', action="store_true", help="switch to decay learning rate")
+    parser.add_argument('--nlevels', type=int, default=5, help="number of polygon levels, higher->finer")
+    parser.add_argument('--feat', type=int, default=256, help="number of base feature layers")
+    parser.add_argument('--dropout', action='store_true', help="dropout during training")
     parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=1e-2, metavar='LR',
@@ -251,15 +317,19 @@ def main():
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--data_folder', type=str, default="processed_data",
+    parser.add_argument('--data_folder', type=str, default="mres_processed_data",
                         help='path to data folder (default: processed_data)')
     parser.add_argument('--log_interval', type=int, default=20, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--log_dir', type=str, default="log",
                         help='log directory for run')
-    parser.add_argument('--decay', action="store_true", help="switch to decay learning rate")
     parser.add_argument('--resume', type=str, default=None, help="path to checkpoint if resume is needed")
     parser.add_argument('--timestamp', action='store_true', help="add timestamp to log_dir name")
+    parser.add_argument('--multires', action='store_true', help="multiresolution loss")
+    parser.add_argument('--transpose', action='store_true', help="transpose target")
+    parser.add_argument('--smooth_loss', default=1.0, type=float, help="smoothness loss multiplier (0 for none)")
+    parser.add_argument('--uniform_loss', action='store_true', help="use same loss regardless of category frequency")
+    parser.add_argument('--network', default=2, choices=[2, 3], type=int, help="network version. 2 or 3")
 
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -268,7 +338,10 @@ def main():
     args.TRAIN_GLOB_STEP = 0
     args.VAL_GLOB_STEP = 0
     args.label_names = ["car", "truck", "train", "bus", "motorcycle", "bicycle", "rider", "person"]
-    args.instances = torch.tensor([30246, 516, 76, 325, 658, 3307, 1872, 19563]).double().to(device)
+    if not args.uniform_loss:
+        args.instances = torch.tensor([30246, 516, 76, 325, 658, 3307, 1872, 19563]).double().to(device)
+    else:
+        args.instances = torch.tensor([1, 1, 1, 1, 1, 1, 1, 1]).double().to(device)
     args.nclass = len(args.label_names)
     args.weights = 1 / torch.log(args.instances / args.instances.sum() + 1.02)
     args.weights /= args.weights.sum()
@@ -300,16 +373,30 @@ def main():
             normalize,
         ])
 
-    trainset = CityScapeLoader(args.data_folder, "train", transforms=transform, RandomHorizontalFlip=0.5, RandomVerticalFlip=0.0)
-    valset = CityScapeLoader(args.data_folder, "val", transforms=transform, RandomHorizontalFlip=0.0, RandomVerticalFlip=0.0)
+    trainset = CityScapeLoader(args.data_folder, "train", transforms=transform, RandomHorizontalFlip=0.5, RandomVerticalFlip=0.0, mres=args.multires, transpose=args.transpose)
+    valset = CityScapeLoader(args.data_folder, "val", transforms=transform, RandomHorizontalFlip=0.0, RandomVerticalFlip=0.0, mres=args.multires, transpose=args.transpose)
     train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     val_loader = DataLoader(valset, batch_size=args.val_batch_size, shuffle=False, drop_last=False)
     
     # initialize and parallelize model
-    # model = PolygonNet()
-    model = PolygonNet2()
+    if args.network == 2:
+        model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    elif args.network == 3:
+        model = PolygonNet3(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+
     model = nn.DataParallel(model)
     model.to(device)
+
+    # Multi-Resolution
+    n = model.module.npoints
+    if args.multires:
+        args.res = [224, 112, 56, 28]
+        args.npt = [n, int(n/2), int(n/4), int(n/8)]
+        args.levels = [1, 2, 4, 8]
+    else:
+        args.res = [224]
+        args.npt = [n]
+        args.levels = [1]
 
     # initialize optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -335,14 +422,17 @@ def main():
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
 
     checkpoint_path = os.path.join(args.log_dir, 'checkpoint')
-    criterion = BatchedRasterLoss2D(npoints=model.module.npoints, loss=args.loss_type, return_raster=True).to(device)
+
+    rres = [True, False, False, False] if args.multires else [True]
+    criterion = [BatchedRasterLoss2D(npoints=n, res=r, loss=args.loss_type, return_raster=rr).to(device) for n, r, rr in zip(args.npt, args.res, rres)]
+    criterion_smooth = SmoothnessLoss()
 
     # training loop
     for epoch in range(args.start_epoch + 1, args.epochs):
         if args.decay:
             scheduler.step(epoch)
-        train(args, model, train_loader, criterion, optimizer, epoch, device, logger, writer)
-        miou = validate(args, model, val_loader, criterion, epoch, device, logger, writer)
+        train(args, model, train_loader, criterion, criterion_smooth, optimizer, epoch, device, logger, writer)
+        miou = validate(args, model, val_loader, criterion, criterion_smooth, epoch, device, logger, writer)
         if miou > args.best_miou:
             args.best_miou = miou
             is_best = True
