@@ -165,13 +165,14 @@ def train(args, model, loader, criterion, criterion_smooth, optimizer, epoch, de
             # compute gradient and do optimizer step
             optimizer.zero_grad()
             loss.backward()
-            for name, p in model.named_parameters():
-                # catch NaNs
-                if torch.isnan(torch.sum(p.grad.data)).item():
-                    p.grad.data[p.grad.data!=p.grad.data] = 0
-                    logger.info("[!] Clamping NaN in gradient of {}".format(name))
-                # clamp grad
-                p.grad.data.clamp_(max=1)
+            if args.check:
+                for name, p in model.named_parameters():
+                    # catch NaNs
+                    if torch.isnan(torch.sum(p.grad.data)).item():
+                        p.grad.data[p.grad.data!=p.grad.data] = 0
+                        logger.info("[!] Clamping NaN in gradient of {}".format(name))
+                    # clamp grad
+                    p.grad.data.clamp_(max=1)
             optimizer.step()
 
             # measure elapsed time
@@ -327,6 +328,7 @@ def main():
     parser.add_argument('--uniform_loss', action='store_true', help="use same loss regardless of category frequency")
     parser.add_argument('--network', default=2, choices=[2, 3], type=int, help="network version. 2 or 3")
     parser.add_argument('--workers', default=12, type=int, help="number of data loading workers")
+    parser.add_argument('--check', action='store_true', help="gradient checks")
 
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()

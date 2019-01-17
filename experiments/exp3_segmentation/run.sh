@@ -1,6 +1,6 @@
 #!/bin/bash
 source activate
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 
 python train.py \
 --batch_size 48 \
@@ -16,7 +16,7 @@ python train.py \
 --feat 256 \
 --dropout \
 --transpose \
---smooth_loss 0.1 \
+--smooth_loss 1 \
 --multires \
 --network 2 \
---log_dir logs/CLIP_net2_mres_sm01_l5_f256_dp
+--log_dir logs/CLIP_net2_mres_sm1_l5_f256_dp

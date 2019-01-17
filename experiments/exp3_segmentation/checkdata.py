@@ -20,7 +20,7 @@ def main():
 			n += 1
 			# catch corrupt data
 			outfile = f
-			infile = "/home/maxjiang/Codes/dsnet/data/original_data/test/"+outfile.split('/')[-1]
+			infile = os.path.join("/home/maxjiang/Codes/dsnet/data/original_data/", outfile.split('/')[-2], outfile.split('/')[-1])
 			process_one(infile, outfile, res=224, mres=True, dev=torch.device('cpu'))
 			dat = np.load(f)
 			target_ = [dat[t] for t in targets]
