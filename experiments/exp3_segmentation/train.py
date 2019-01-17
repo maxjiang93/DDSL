@@ -190,29 +190,25 @@ def train(args, model, loader, criterion, criterion_smooth, optimizer, epoch, de
                             'CompTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                             'DataTime {data_time.val:.3f} ({data_time.avg:.3f})\t'
                             'RasLoss@[224/112/56/28] {rl[0].val:.4f}/{rl[1].val:.4f}/{rl[2].val:.4f}/{rl[3].val:.4f}\t'
+                            'SmoothLoss {smloss.val:.4f} ({smloss.avg:.4f})\t'
                             'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                             'mIoU {miou:.3f} ({miou:.3f})\t').format(
                              epoch, batch_idx, len(loader), batch_time=batch_time,
-                             data_time=data_time, loss=losses_sum, miou=mious.val.mean().item(), rl=rasterlosses)
+                             data_time=data_time, loss=losses_sum, miou=mious.val.mean().item(), rl=rasterlosses, smloss=smoothloss)
                 logger.info(log_text)
-                # # update TensorboardX
-                # compimg = compose_masked_img(output_raster, target[0], input, args.img_mean, args.img_std)
-                # imgrid = vutils.make_grid(compimg, normalize=True, scale_each=True)
-                # writer.add_image('training/predictions', imgrid, args.TRAIN_GLOB_STEP)
-                # writer.add_text('training/text_log', log_text, args.TRAIN_GLOB_STEP)
+                # update TensorboardX
+                compimg = compose_masked_img(output_raster, target[0], input, args.img_mean, args.img_std)
+                imgrid = vutils.make_grid(compimg, normalize=True, scale_each=True)
+                writer.add_image('training/predictions', imgrid, args.TRAIN_GLOB_STEP)
+                writer.add_text('training/text_log', log_text, args.TRAIN_GLOB_STEP)
 
-                # writer.add_scalar('training/batch_time', batch_time.val, args.TRAIN_GLOB_STEP)
-                # writer.add_scalar('training/data_time', data_time.val, args.TRAIN_GLOB_STEP)
-                # writer.add_scalar('training/miou_mean', mious.valcavg, args.TRAIN_GLOB_STEP)
-                # for i, r in enumerate(args.res):
-                #     writer.add_scalar('training/rasterloss@'+str(r), rasterlosses[i].val, args.TRAIN_GLOB_STEP)
-                # writer.add_scalar('training/smoothloss', smoothloss.val, args.TRAIN_GLOB_STEP)
-                # writer.add_scalar('training/totalloss', losses_sum.val, args.TRAIN_GLOB_STEP)
-
-            # DEBUG
-            if mious.valcavg == 0:
-                print("DEBUG: Printing vertices for 0 mIoU")
-                print(output[0])
+                writer.add_scalar('training/batch_time', batch_time.val, args.TRAIN_GLOB_STEP)
+                writer.add_scalar('training/data_time', data_time.val, args.TRAIN_GLOB_STEP)
+                writer.add_scalar('training/miou_mean', mious.valcavg, args.TRAIN_GLOB_STEP)
+                for i, r in enumerate(args.res):
+                    writer.add_scalar('training/rasterloss@'+str(r), rasterlosses[i].val, args.TRAIN_GLOB_STEP)
+                writer.add_scalar('training/smoothloss', smoothloss.val, args.TRAIN_GLOB_STEP)
+                writer.add_scalar('training/totalloss', losses_sum.val, args.TRAIN_GLOB_STEP)
 
             args.TRAIN_GLOB_STEP += 1
     logger.info("Total Time per Epoch: {} min".format((time.time() - time0)/60))
@@ -330,6 +326,7 @@ def main():
     parser.add_argument('--smooth_loss', default=1.0, type=float, help="smoothness loss multiplier (0 for none)")
     parser.add_argument('--uniform_loss', action='store_true', help="use same loss regardless of category frequency")
     parser.add_argument('--network', default=2, choices=[2, 3], type=int, help="network version. 2 or 3")
+    parser.add_argument('--workers', default=12, type=int, help="number of data loading workers")
 
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -375,8 +372,8 @@ def main():
 
     trainset = CityScapeLoader(args.data_folder, "train", transforms=transform, RandomHorizontalFlip=0.5, RandomVerticalFlip=0.0, mres=args.multires, transpose=args.transpose)
     valset = CityScapeLoader(args.data_folder, "val", transforms=transform, RandomHorizontalFlip=0.0, RandomVerticalFlip=0.0, mres=args.multires, transpose=args.transpose)
-    train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
-    val_loader = DataLoader(valset, batch_size=args.val_batch_size, shuffle=False, drop_last=False)
+    train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=args.workers, pin_memory=True)
+    val_loader = DataLoader(valset, batch_size=args.val_batch_size, shuffle=True, drop_last=False, num_workers=args.workers, pin_memory=True)
     
     # initialize and parallelize model
     if args.network == 2:

@@ -19,7 +19,7 @@ mapping =  {"car": 0,
 
 EPS = 1e-4
 
-def convert_ddsl(V, res=224):
+def convert_ddsl(V, res=224, dev=torch.device('cuda')):
     V = torch.DoubleTensor(V)
     npoints = V.shape[0]
     perm = list(range(1, npoints)) + [0]
@@ -29,11 +29,11 @@ def convert_ddsl(V, res=224):
     D = torch.ones(E.shape[0], 1, dtype=torch.float64)
     ddsl = DDSL_phys([res] * 2, [1] * 2, j=2)
     V += 1e-4 * torch.rand_like(V)
-    V, E, D = V.cuda(), E.cuda(), D.cuda()
+    V, E, D = V.to(dev), E.to(dev), D.to(dev)
     f = ddsl(V, E, D)
     return f.squeeze().detach().cpu().numpy()
 
-def process_one(infile, outfile, res=224, mres=False):
+def process_one(infile, outfile, res=224, mres=False, dev=torch.device('cuda')):
     def adjust(f):
         # check orientation
         if np.absolute(f.max()) < np.absolute(f.min()):
@@ -44,12 +44,12 @@ def process_one(infile, outfile, res=224, mres=False):
     V = dat['poly']
     # check poly within [0,1)
     assert(V.min() >= 0 and V.max() < 1)
-    f = adjust(convert_ddsl(V, res=res))
+    f = adjust(convert_ddsl(V, res=res, dev=dev))
     
     if mres:
-        f_2 = adjust(convert_ddsl(V, res=int(res/2)))
-        f_4 = adjust(convert_ddsl(V, res=int(res/4)))
-        f_8 = adjust(convert_ddsl(V, res=int(res/8)))
+        f_2 = adjust(convert_ddsl(V, res=int(res/2), dev=dev))
+        f_4 = adjust(convert_ddsl(V, res=int(res/4), dev=dev))
+        f_8 = adjust(convert_ddsl(V, res=int(res/8), dev=dev))
         save_dict = {'image': dat['image'],
                      'label': dat['label'],
                      'label_id': mapping[str(dat['label'])],

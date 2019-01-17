@@ -37,8 +37,8 @@ class CityScapeLoader(Dataset):
 		except:
 			# catch corrupt data
 			outfile = self.filelist[idx]
-			infile = "/home/maxjiang/Codes/dsnet/data/original_data/test/"+outfile.split('/')[-1]
-			process_one(infile, outfile, res=224, mres=True)
+			infile = os.path.join("/home/maxjiang/Codes/dsnet/data/original_data/", self.partition, outfile.split('/')[-1])
+			process_one(infile, outfile, res=224, mres=True, dev=torch.device('cpu'))
 			# retrieve data again
 			dat = np.load(self.filelist[idx])
 			target_ = [dat[t].T for t in targets] if self.transpose else [dat[t] for t in targets]

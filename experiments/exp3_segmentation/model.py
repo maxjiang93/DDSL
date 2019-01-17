@@ -6,6 +6,7 @@ import sys; sys.path.append("../../ddsl")
 from ddsl import DDSL_phys
 from math import pi
 
+EPS = 1e-7
 
 class SmoothnessLoss(nn.Module):
     def __init__(self, degree=2):
@@ -24,6 +25,7 @@ class SmoothnessLoss(nn.Module):
         vec_n = V_next - V
         vec_p = V - V_prev
         cos_theta = torch.sum(vec_n * vec_p, dim=-1)/torch.norm(vec_n, dim=-1)/torch.norm(vec_p, dim=-1)
+        cos_theta = torch.clamp(cos_theta, min=-1+EPS, max=1-EPS)
         theta = pi - torch.acos(cos_theta)
         loss = ((-1) ** self.degree) * (theta / pi - 1) ** self.degree
         return torch.mean(loss, dim=1)
