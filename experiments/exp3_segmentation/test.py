@@ -5,17 +5,20 @@ import torchvision.utils as vutils
 from train import masked_miou, AverageMeter, compose_masked_img, validate
 from loader import CityScapeLoader
 from torch.utils.data import Dataset, DataLoader
-from model import BatchedRasterLoss2D, PolygonNet2
+from model import BatchedRasterLoss2D, PolygonNet, PolygonNet2, SmoothnessLoss, PolygonNet3
 import importlib.machinery
 
 import argparse, time, os
 from tqdm import tqdm
+from tabulate import tabulate
 
 
-def evaluate(args, model, loader, criterion, epoch, device):
+def evaluate(args, model, loader, criterion, criterion_smooth, epoch, device):
     model.eval()
 
-    losses = AverageMeter()
+    rasterlosses = [AverageMeter() for _ in range(len(args.res))]
+    smoothloss = AverageMeter()
+    losses_sum = AverageMeter()
     mious = AverageMeter()
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -29,29 +32,44 @@ def evaluate(args, model, loader, criterion, epoch, device):
             data_time.update(time.time() - end)
 
             # compute output
-            n = input.size(0)
-            input, target, label = input.to(device), target.to(device), label.to(device)
+            num = input.size(0)
+            input, label = input.to(device), label.to(device)
+            target = [t.to(device) for t in target]
             output = model(input) # output shape [N, 128, 2]
-            loss_vec, output_raster = criterion(output, target)
-            loss = (loss_vec * args.weights[label]).sum()
+
+            evals = [crit(output[:, ::l], t) for crit, l, t in zip(criterion, args.levels, target)]
+            loss_vecs = [e[0] for e in evals]
+            output_rasters = [e[1] for e in evals]
+            rasterlosses_ = [(lv * args.weights[label]).sum() for lv in loss_vecs]
+
+            rasterloss = torch.sum(torch.stack(rasterlosses_, dim=0), dim=0)
+            output_raster = output_rasters[0]
+
+            # compute smoothness loss
+            smoothloss_ = criterion_smooth(output)
+            smoothloss_ = (smoothloss_).mean()
+
+            loss = rasterloss + args.smooth_loss * smoothloss_
 
             # measure miou and record loss
-            miou, miou_count = masked_miou(output_raster, target, label, args.nclass)
-            losses.update(loss.item(), n)
-            mious.update(miou, miou_count)
+            miou, miou_count = masked_miou(output_raster, target[0], label, args.nclass)
 
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
 
             # update statistics
-            losses.update(loss, n)
+            for i in range(len(args.res)):
+                rasterlosses[i].update(rasterlosses_[i].item())
+            smoothloss.update(smoothloss_)
+            mious.update(miou, miou_count)
+            losses_sum.update(rasterloss.item(), num)
 
             # output visualization
             if count < args.nsamples:
                 # create image grid
                 fname = os.path.join(args.output_dir, "sample_{}.png".format(count))
-                compimg = compose_masked_img(output_raster, target, input, args.img_mean, args.img_std)
+                compimg = compose_masked_img(output_raster, target[0], input, args.img_mean, args.img_std)
                 imgrid = vutils.save_image(compimg, fname, normalize=False, scale_each=False)
 
             count += 1
@@ -60,10 +78,12 @@ def evaluate(args, model, loader, criterion, epoch, device):
                     'CompTime {batch_time.sum:.3f} ({batch_time.avg:.3f})\t'
                     'DataTime {data_time.sum:.3f} ({data_time.avg:.3f})\t'
                     'Loss {loss.avg:.4f}\t'
-                    'mIoU {miou:.4f} (val {bmiou:.4f})\t').format(
+                    'mIoU {miou:.3f}\t').format(
                      epoch, batch_time=batch_time,
-                     data_time=data_time, loss=losses, miou=mious.avgcavg, bmiou=args.best_miou)
+                     data_time=data_time, loss=losses_sum, miou=mious.avgcavg)
         print(log_text)
+        # tabulate mean iou 
+        print(tabulate(dict(zip(args.label_names, [[iou] for iou in mious.avg])), headers="keys"))
 
 
 def main():
@@ -72,20 +92,27 @@ def main():
     parser.add_argument('--test_batch_size', type=int, default=64, metavar='N',
                         help='input batch size for test (default: 64)')
     parser.add_argument('--loss_type', type=str, choices=['l1', 'l2'], default='l1', help='type of loss for raster loss computation')
-    parser.add_argument('--nlevels', type=int, default=5, help="number of polygon levels, higher->finer")
+    parser.add_argument('--nlevels', type=int, default=4, help="number of polygon levels, higher->finer")
     parser.add_argument('--feat', type=int, default=256, help="number of base feature layers")
     parser.add_argument('--dropout', action='store_true', help="dropout during training")
     parser.add_argument('--no_cuda', action='store_true', default=False,
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--data_folder', type=str, default="processed_data",
+    parser.add_argument('--data_folder', type=str, default="mres_processed_data",
                         help='path to data folder (default: processed_data)')
     # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_new2_resume_2019_01_10_16_01_56/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
-    parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_l4_2019_01_12_15_58_38/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
+    # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_l4_2019_01_12_15_58_38/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
     # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_drop_l5_f256_2019_01_12_12_13_54/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
+    parser.add_argument('--ckpt', type=str, default='/home/maxjiang/codes/dsnet/experiments/exp3_segmentation/logs/CLIP_net2_mres_sm1_l4_f256_dp_2019_01_16_18_23_11/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
     parser.add_argument('--output_dir', type=str, default='output_vis_ins', help="directory to output visualizations")
-    parser.add_argument('--nsamples', type=int, default=10, help='number of samples to produce. 0 for all.')
+    parser.add_argument('--nsamples', type=int, default=0, help='number of samples to produce. 0 for all.')
+    parser.add_argument('--multires', action='store_true', help="multiresolution loss")
+    parser.add_argument('--transpose', action='store_true', help="transpose target")
+    parser.add_argument('--smooth_loss', default=1.0, type=float, help="smoothness loss multiplier (0 for none)")
+    parser.add_argument('--uniform_loss', action='store_true', help="use same loss regardless of category frequency")
+    parser.add_argument('--network', default=2, choices=[2, 3], type=int, help="network version. 2 or 3")
+    parser.add_argument('--workers', default=12, type=int, help="number of data loading workers")
 
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -116,13 +143,28 @@ def main():
             normalize,
         ])
 
-    testset = CityScapeLoader(args.data_folder, "test", transforms=transform, RandomHorizontalFlip=0.0, RandomVerticalFlip=0.0)
-    test_loader = DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, drop_last=False)
-
+    testset = CityScapeLoader(args.data_folder, "test", transforms=transform, RandomHorizontalFlip=0.0, RandomVerticalFlip=0.0, mres=args.multires, transpose=args.transpose)
+    test_loader = DataLoader(testset, batch_size=args.test_batch_size, shuffle=True, drop_last=False, num_workers=args.workers, pin_memory=True)
+    print(len(testset))
     # initialize and parallelize model
-    model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    # initialize and parallelize model
+    if args.network == 2:
+        model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    elif args.network == 3:
+        model = PolygonNet3(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
     model = nn.DataParallel(model)
     model.to(device)
+
+    # Multi-Resolution
+    n = model.module.npoints
+    if args.multires:
+        args.res = [224, 112, 56, 28]
+        args.npt = [n, int(n/2), int(n/4), int(n/8)]
+        args.levels = [1, 2, 4, 8]
+    else:
+        args.res = [224]
+        args.npt = [n]
+        args.levels = [1]
 
     if os.path.isfile(args.ckpt):
         print("=> loading checkpoint '{}'".format(args.ckpt))
@@ -142,8 +184,11 @@ def main():
         print("=> no checkpoint found at '{}'".format(args.ckpt))
 
     print("{} paramerters in total".format(sum(x.numel() for x in model.parameters())))
-    criterion = BatchedRasterLoss2D(npoints=model.module.npoints, loss=args.loss_type, return_raster=True).to(device)
-    evaluate(args, model, test_loader, criterion, checkpoint['epoch'], device)
+    rres = [True, False, False, False] if args.multires else [True]
+    criterion = [BatchedRasterLoss2D(npoints=n, res=r, loss=args.loss_type, return_raster=rr).to(device) for n, r, rr in zip(args.npt, args.res, rres)]
+    criterion_smooth = SmoothnessLoss()
+
+    evaluate(args, model, test_loader, criterion, criterion_smooth, checkpoint['epoch'], device)
 
 if __name__ == '__main__':
     main()

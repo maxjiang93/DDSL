@@ -226,7 +226,7 @@ def validate(args, model, loader, criterion, criterion_smooth, epoch, device, lo
 
     with torch.no_grad():
         end = time.time()
-        for batch_idx, (input, target, label) in enumerate(loader):
+        for batch_idx, (input, target, label) in enumerate(loader):     
             # measure data loading time
             data_time.update(time.time() - end)
 
@@ -418,7 +418,7 @@ def main():
     logger.info("{} paramerters in total".format(sum(x.numel() for x in model.parameters())))
 
     if args.decay:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.75)
 
     checkpoint_path = os.path.join(args.log_dir, 'checkpoint')
 

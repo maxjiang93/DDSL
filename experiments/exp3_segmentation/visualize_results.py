@@ -6,7 +6,7 @@ import torch
 import torchvision
 import torch.nn as nn
 import argparse
-from model import PolygonNet2
+from model import PolygonNet2, PolygonNet3
 from tqdm import tqdm
 import json
 import numpy as np
@@ -14,21 +14,12 @@ import PIL
 from random import shuffle
 import cv2
 
-EPS = 1e-7
+# TODO: Check import of these
+import sys; sys.path.append("baseline")
+from polygonrnnpp import PolygonRNNpp
+import Utils.utils as utils
 
-def batch_smooth(polygons, steps=0, lambda_=.5):
-    """
-    batched laplacian smoothing for post-processing
-    :param polygons: shape (N, L, 2)
-    :param steps: number of steps
-    """
-    L = polygons.shape[1]
-    for _ in range(steps):
-        next_ = list(range(1, L)) + [0]
-        prev_ = [L-1] + list(range(L-1))
-        lap = 0.5*(polygons[:, next_]+polygons[:, prev_]) - polygons
-        polygons += lambda_ * lap
-    return polygons
+EPS = 1e-7
 
 
 def batch_transform(inputs, transform):
@@ -48,9 +39,27 @@ def batch_transform(inputs, transform):
 
     return torch.stack(tensors, dim=0)
 
+def batch_no_transform(inputs):
+    """
+    :param inputs: shape (N, H, W, 3)
+    :param transform: transform function for a single image
+    :return (N, 3, H, W) tensor
+    """
+    transform = torchvision.transforms.ToTensor()
+    if np.issubdtype(inputs.dtype, np.floating) and inputs.max() <= 1:
+        inputs = (inputs * 255).astype(np.uint8)
+
+    tensors = []
+    for i in range(inputs.shape[0]):
+        img = PIL.Image.fromarray(inputs[i])
+        img_tensor = transform(img) # [3, H, W]
+        tensors.append(img_tensor)
+
+    return torch.stack(tensors, dim=0)
+
 
 class visualizer(object):
-    def __init__(self, model, transform, mapping_dir, img_dir, partition='test', skip_multicomponents=False, export_gt=True, smooth_steps=3, lambda_=.5, rand_samp=False):
+    def __init__(self, models, transform, mapping_dir, img_dir, device, partition='test', skip_multicomponents=False, export_gt=True, rand_samp=False, export_baselines=True):
         assert(partition in ['train', 'test', 'val'])
         # partition names named differently
         if partition == 'test':
@@ -69,12 +78,19 @@ class visualizer(object):
                 "rider",
                 "person"
             ]
-        self.model = model
+        self.models = models
         self.transform = transform
         self.mapping_dir = mapping_dir
         self.img_dir = img_dir
         self.skip_multicomponents = skip_multicomponents
         self.export_gt = export_gt
+        self.export_baselines = export_baselines
+        if self.export_baselines:
+            self.project_poly = [self.project_polygons_ours, self.project_polygons_rnn, self.project_polygons_rnn]
+            self.grid_sizes = [None, 28, 112]
+        else:
+            self.project_poly = [self.project_polygons_ours]
+            self.grid_sizes = [None]
         self.flist = sorted(glob(os.path.join(mapping_dir, self.p, "*", "*.json")))
         self.rand_samp = rand_samp
         if self.rand_samp:
@@ -83,8 +99,7 @@ class visualizer(object):
         self.max_poly_len = 71
         self.min_area = 100
         self.sub_th = 0
-        self.smooth_steps = smooth_steps
-        self.lambda_ = lambda_
+        self.device = device
 
     def __len__(self):
         return len(self.flist)
@@ -106,7 +121,10 @@ class visualizer(object):
         instances, _ = self.process_info(mfile)
         
         # read full image
-        img_path = instances[0]['img_path'].split('/leftImg8bit/')[-1]
+        try:
+            img_path = instances[0]['img_path'].split('/leftImg8bit/')[-1]
+        except:
+            from pdb import set_trace; set_trace()
         img_path = os.path.join(self.img_dir, img_path)
         full_img = plt.imread(img_path)
         
@@ -115,27 +133,34 @@ class visualizer(object):
         crops = np.stack([ins['img'] for ins in instance_dicts], axis=0)
         
         # feed to neural net
-        self.model.eval()
-        inputs = batch_transform(crops, self.transform)
-        pred_poly = self.model(inputs).detach().cpu().numpy()
-        pred_poly = pred_poly[..., ::-1]
-
-        # smooth polygons
-        pred_poly = batch_smooth(pred_poly, steps=self.smooth_steps, lambda_=self.lambda_) 
+        for model in self.models:
+            model.eval()
+        inputs = batch_transform(crops, self.transform).to(self.device)
+        inputs_ = batch_no_transform(crops).to(self.device)
+        pred_polys = []
+        with torch.no_grad():
+            for i, model in enumerate(self.models):
+                if i == 0:
+                    pred_poly = model(inputs).detach().cpu().numpy()
+                else:
+                    pred_poly = model(inputs_.clone()).detach().cpu().numpy()
+                pred_polys.append(pred_poly)
+                torch.cuda.empty_cache()
+        pred_polys[0] = pred_polys[0][..., ::-1]
         
         # backproject polygons onto image
         gt_polygons = [d['poly'] for d in instance_dicts]
-        pd_polygons = [pred_poly[i] for i in range(pred_poly.shape[0])]
+        pd_polygons = [[pred_poly[i] for i in range(pred_poly.shape[0])] for pred_poly in pred_polys]
         colors = np.random.uniform(0, 255, size=(len(instance_dicts), 3))  
 
-        PD_img = self.project_polygons(full_img, instance_dicts, pd_polygons, colors)
+        PD_imgs = [proj(full_img, instance_dicts, pd_polygon, gs, colors) for proj, gs, pd_polygon in zip(self.project_poly, self.grid_sizes, pd_polygons)]
         if self.export_gt:
-            GT_img = self.project_polygons(full_img, instance_dicts, gt_polygons, colors)
-            return PD_img, GT_img, img_path
+            GT_img = self.project_polygons_ours(full_img, instance_dicts, gt_polygons, None, colors)
+            return PD_imgs, GT_img, img_path
         else:
-            return PD_img, img_path
+            return PD_imgs, img_path
     
-    def project_polygons(self, img, instance_dicts, polygons, colors=None):
+    def project_polygons_ours(self, img, instance_dicts, polygons, grid_size, colors=None):
         assert(len(instance_dicts) == len(polygons))
 
         # colors
@@ -153,6 +178,37 @@ class visualizer(object):
             poly[:, 0] += sp[0]
             poly[:, 1] += sp[1]
             polygons[i] = poly
+
+        pred_mask = np.zeros(list(img.shape), dtype=np.uint8) 
+
+        for i, poly in enumerate(polygons):
+            cv2.fillPoly(pred_mask, [poly], colors[i])
+            cv2.polylines(pred_mask, [poly], True, contour_color, 4)
+
+        pred_mask = np.clip(pred_mask, 0, 255)/255
+        masked_img = np.clip(img+pred_mask*0.5, 0, 1)
+        return masked_img
+
+    def project_polygons_rnn(self, img, instance_dicts, polygons, grid_size, colors=None):
+        assert(len(instance_dicts) == len(polygons))
+
+        # colors
+        contour_color = np.array((255., 133., 0.))
+        if colors is None:
+            colors = np.random.uniform(0, 255, size=(len(polygons), 3))         
+        else:
+            assert(colors.shape[0] == len(polygons))
+
+        polys_ = []
+
+        widths = [d['patch_w'] for d in instance_dicts]
+        sps = [d['starting_point'] for d in instance_dicts]
+        
+        for i, (p, w, sp) in enumerate(zip(polygons, widths, sps)):
+            _, poly = utils.get_full_mask_from_xy(p, grid_size, w, sp, img.shape[0], img.shape[1])
+            polys_.append(poly)
+
+        polygons = polys_
 
         pred_mask = np.zeros(list(img.shape), dtype=np.uint8) 
 
@@ -287,7 +343,7 @@ def main():
     parser = argparse.ArgumentParser(description='Segmentation')
     # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_new2_resume_2019_01_10_16_01_56/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
     parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_drop_l5_f256_2019_01_12_12_13_54/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
-    parser.add_argument('--nlevels', type=int, default=5, help="number of polygon levels, higher->finer")
+    parser.add_argument('--nlevels', type=int, default=4, help="number of polygon levels, higher->finer")
     parser.add_argument('--feat', type=int, default=256, help="number of base feature layers")
     parser.add_argument('--dropout', action='store_true', help="dropout during training")
     parser.add_argument('--raw_img_dir', type=str, default='leftImg8bit', help='path to raw image directory')
@@ -297,9 +353,9 @@ def main():
     parser.add_argument('--nsamples', type=int, default=10, help='number of samples to produce. 0 for all.')
     parser.add_argument('--export_gt', action='store_true', help='export ground truth images also')
     parser.add_argument('--skip_multicomponents', action='store_true', help='skip multiple components')
-    parser.add_argument('--smooth_steps', type=int, default=3, help='number of laplacian smoothing steps')
-    parser.add_argument('--lambda_', type=int, default=0.5, help='smoothing lambda in (0, 1)')
     parser.add_argument('--rand_samp', action='store_true', help='randomly draw samples to save')
+    parser.add_argument('--network', default=3, choices=[2, 3], type=int, help="network version. 2 or 3")
+    parser.add_argument('--export_baselines', action='store_true', help='export baseline comparions')
 
     args = parser.parse_args()
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   
@@ -318,15 +374,19 @@ def main():
 
     # DO NOT include horizontal and vertical flips in the composed transforms!
     transform = torchvision.transforms.Compose([
-            torchvision.transforms.ColorJitter(hue=.1, saturation=.1),
             torchvision.transforms.ToTensor(),
             normalize,
         ])
 
     # load model
-    model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    if args.network == 2:
+        model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    elif args.network == 3:
+        model = PolygonNet3(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
     model = nn.DataParallel(model)
     model.to(device)
+    models = [model]
+    model_names = ["Ours"]
     
     if os.path.isfile(args.ckpt):
         print("=> loading checkpoint '{}'".format(args.ckpt))
@@ -345,21 +405,31 @@ def main():
     else:
         print("=> no checkpoint found at '{}'".format(args.ckpt))
 
+    # add baseline models
+    if args.export_baselines:
+        model_polyrnn = PolygonRNNpp(exp="mle").to(device)
+        model_polyrnnpp = PolygonRNNpp(exp="ggnn").to(device)
+        model_polyrnn.eval()
+        model_polyrnnpp.eval()
+        models += [model_polyrnn, model_polyrnnpp]
+        model_names += ["PolyRNN", "PolyRNNpp"]
+
     # create and save visualizations
-    vis = visualizer(model=model, transform=transform, mapping_dir=args.mapping_dir, img_dir=args.raw_img_dir, skip_multicomponents=args.skip_multicomponents, export_gt=args.export_gt, smooth_steps=args.smooth_steps, lambda_=args.lambda_, rand_samp=args.rand_samp)
-    if args.nsamples < 1:
+    vis = visualizer(models=models, transform=transform, mapping_dir=args.mapping_dir, img_dir=args.raw_img_dir, device=device, skip_multicomponents=args.skip_multicomponents, export_gt=args.export_gt, rand_samp=args.rand_samp)
+    if args.nsamples < 0:
         args.nsamples = len(vis)
-    for i in tqdm(range(args.nsamples)):
+    for i in range(args.nsamples):
         if args.export_gt:
-            pd_img, gt_img, imgpath = vis[i]
+            pd_imgs, gt_img, imgpath = vis[i]
         else:
-            pd_img, imgpath = vis[i]
+            pd_imgs, imgpath = vis[i]
         img_path = imgpath.split('/')[-1].split('.')[0]
-        pd_save = os.path.join(args.output_dir, img_path+'_PD.png')
-        plt.imsave(pd_save, pd_img)
-        if args.export_gt:
-            gt_save = os.path.join(args.output_dir, img_path+'_GT.png')
-            plt.imsave(gt_save, gt_img)
+        for name, pd_img in zip(model_names, pd_imgs):
+            pd_save = os.path.join(args.output_dir, img_path+'_'+name+'_PD.png')
+            plt.imsave(pd_save, pd_img)
+            if args.export_gt:
+                gt_save = os.path.join(args.output_dir, img_path+'_GT.png')
+                plt.imsave(gt_save, gt_img)
 
 if __name__ == '__main__':
     main()
