@@ -51,7 +51,6 @@ class BatchedRasterLoss2D(nn.Module):
         """
         V = V.double()
         b = V.shape[0]
-
         f = torch.stack(tuple([self.ddsl(V[i], self.E, self.D).squeeze(-1) for i in range(b)]), dim=0) # [N, res, res]
         # loss
         if self.loss == 'l1':

@@ -241,6 +241,7 @@ class DDSL_spec(nn.Module):
         :return F: ndarray of shape (res[0], res[1], ..., res[-1]/2, n_channel) 
                    last dimension is halfed since the signal is assumed to be real
         """
+        V, D = V.double(), D.double()
         return SimplexFT.apply(V,E,D,self.res,self.t,self.j,self.elem_batch,self.mode)
 
     
@@ -278,13 +279,17 @@ class DDSL_phys(nn.Module):
         :param D: int ndarray of shape (n_elem, n_channel)
         :return f: dealiased raster image in physical domain of shape (res[0], res[1], ..., res[-1], n_channel)
         """
+        V, D = V.double(), D.double()
         F = SimplexFT.apply(V,E,D,self.res,self.t,self.j,self.elem_batch,self.mode)
+        F[torch.isnan(F)] = 0 # pad nans to 0
         if self.filter is not None:
             self.filter = self.filter.to(F.device)
             F *= self.filter # [dim0, dim1, dim2, n_channel, 2]
         dim = len(self.res)
         F = F.permute(*([dim] + list(range(dim)) + [dim+1])) # [n_channel, dim0, dim1, dim2, 2]
         f = torch.irfft(F, dim, signal_sizes=self.res)
+        f = f.permute(*(list(range(1, 1+dim)) + [0]))
+                        
         return f
     
     def _gaussian_filter(self):

@@ -101,9 +101,6 @@ def main():
                         help='random seed (default: 1)')
     parser.add_argument('--data_folder', type=str, default="mres_processed_data",
                         help='path to data folder (default: processed_data)')
-    # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_new2_resume_2019_01_10_16_01_56/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
-    # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_l4_2019_01_12_15_58_38/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
-    # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_drop_l5_f256_2019_01_12_12_13_54/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
     parser.add_argument('--ckpt', type=str, default='/home/maxjiang/codes/dsnet/experiments/exp3_segmentation/logs/CLIP_net2_mres_sm1_l4_f256_dp_2019_01_16_18_23_11/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
     parser.add_argument('--output_dir', type=str, default='output_vis_ins', help="directory to output visualizations")
     parser.add_argument('--nsamples', type=int, default=0, help='number of samples to produce. 0 for all.')
@@ -111,7 +108,7 @@ def main():
     parser.add_argument('--transpose', action='store_true', help="transpose target")
     parser.add_argument('--smooth_loss', default=1.0, type=float, help="smoothness loss multiplier (0 for none)")
     parser.add_argument('--uniform_loss', action='store_true', help="use same loss regardless of category frequency")
-    parser.add_argument('--network', default=2, choices=[2, 3], type=int, help="network version. 2 or 3")
+    parser.add_argument('--network', default=3, choices=[2, 3], type=int, help="network version. 2 or 3")
     parser.add_argument('--workers', default=12, type=int, help="number of data loading workers")
 
     args = parser.parse_args()
@@ -187,7 +184,6 @@ def main():
     rres = [True, False, False, False] if args.multires else [True]
     criterion = [BatchedRasterLoss2D(npoints=n, res=r, loss=args.loss_type, return_raster=rr).to(device) for n, r, rr in zip(args.npt, args.res, rres)]
     criterion_smooth = SmoothnessLoss()
-
     evaluate(args, model, test_loader, criterion, criterion_smooth, checkpoint['epoch'], device)
 
 if __name__ == '__main__':
