@@ -1,5 +1,5 @@
-# DSNet
-Differential Shape Layer for Neural Networks
+# DDSL
+Deep Differential Shape Layer for Neural Networks
 
 ### Directory Structure
 ```bash
