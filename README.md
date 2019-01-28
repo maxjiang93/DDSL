@@ -3,7 +3,7 @@ By: [Chiyu "Max" Jiang](www.maxjiang.ml), [Dana Lansigan](http://dlansigan.githu
 
 \[[Project Website]()\] \[[Paper]()\]
 
-![teaser](doc/teaser.png "DDSL_teaser")
+<img src="./doc/teaser.png" alt="DDSL_teaser" width=100>
 
 ### Introduction
 This repository is based on paper: [DDSL: Deep Differential Simplex Layer for Neural Networks](). The [project webpage]() presents an overview of the project. 
