@@ -11,7 +11,7 @@ import shutil, argparse, logging, sys, time, os
 from tensorboardX import SummaryWriter
 
 from loader import CityScapeLoader
-from model import BatchedRasterLoss2D, PeriodicUpsample1D, PolygonNet, PolygonNet2, SmoothnessLoss, PolygonNet3
+from model import BatchedRasterLoss2D, PeriodicUpsample1D, PolygonNet, SmoothnessLoss
 
 def initialize_logger(args):
     if not os.path.exists(args.log_dir):
@@ -165,14 +165,6 @@ def train(args, model, loader, criterion, criterion_smooth, optimizer, epoch, de
             # compute gradient and do optimizer step
             optimizer.zero_grad()
             loss.backward()
-            if args.check:
-                for name, p in model.named_parameters():
-                    # catch NaNs
-                    if torch.isnan(torch.sum(p.grad.data)).item():
-                        p.grad.data[p.grad.data!=p.grad.data] = 0
-                        logger.info("[!] Clamping NaN in gradient of {}".format(name))
-                    # clamp grad
-                    p.grad.data.clamp_(max=1)
             optimizer.step()
 
             # measure elapsed time
@@ -315,7 +307,7 @@ def main():
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
     parser.add_argument('--data_folder', type=str, default="mres_processed_data",
-                        help='path to data folder (default: processed_data)')
+                        help='path to data folder (default: mres_processed_data)')
     parser.add_argument('--log_interval', type=int, default=20, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--log_dir', type=str, default="log",
@@ -326,7 +318,6 @@ def main():
     parser.add_argument('--transpose', action='store_true', help="transpose target")
     parser.add_argument('--smooth_loss', default=1.0, type=float, help="smoothness loss multiplier (0 for none)")
     parser.add_argument('--uniform_loss', action='store_true', help="use same loss regardless of category frequency")
-    parser.add_argument('--network', default=2, choices=[2, 3], type=int, help="network version. 2 or 3")
     parser.add_argument('--workers', default=12, type=int, help="number of data loading workers")
     parser.add_argument('--check', action='store_true', help="gradient checks")
 
@@ -378,10 +369,7 @@ def main():
     val_loader = DataLoader(valset, batch_size=args.val_batch_size, shuffle=True, drop_last=False, num_workers=args.workers, pin_memory=True)
     
     # initialize and parallelize model
-    if args.network == 2:
-        model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
-    elif args.network == 3:
-        model = PolygonNet3(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    model = PolygonNet(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
 
     model = nn.DataParallel(model)
     model.to(device)

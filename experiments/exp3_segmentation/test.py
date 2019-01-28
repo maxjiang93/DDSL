@@ -5,7 +5,7 @@ import torchvision.utils as vutils
 from train import masked_miou, AverageMeter, compose_masked_img, validate
 from loader import CityScapeLoader
 from torch.utils.data import Dataset, DataLoader
-from model import BatchedRasterLoss2D, PolygonNet, PolygonNet2, SmoothnessLoss, PolygonNet3
+from model import BatchedRasterLoss2D, SmoothnessLoss, PolygonNet
 import importlib.machinery
 
 import argparse, time, os
@@ -100,15 +100,14 @@ def main():
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
     parser.add_argument('--data_folder', type=str, default="mres_processed_data",
-                        help='path to data folder (default: processed_data)')
-    parser.add_argument('--ckpt', type=str, default='/home/maxjiang/codes/dsnet/experiments/exp3_segmentation/logs/CLIP_net2_mres_sm1_l4_f256_dp_2019_01_16_18_23_11/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
+                        help='path to data folder (default: mres_processed_data)')
+    parser.add_argument('--ckpt', type=str, default='checkpoint/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
     parser.add_argument('--output_dir', type=str, default='output_vis_ins', help="directory to output visualizations")
-    parser.add_argument('--nsamples', type=int, default=0, help='number of samples to produce. 0 for all.')
+    parser.add_argument('--nsamples', type=int, default=0, help='number of samples to produce.')
     parser.add_argument('--multires', action='store_true', help="multiresolution loss")
     parser.add_argument('--transpose', action='store_true', help="transpose target")
     parser.add_argument('--smooth_loss', default=1.0, type=float, help="smoothness loss multiplier (0 for none)")
     parser.add_argument('--uniform_loss', action='store_true', help="use same loss regardless of category frequency")
-    parser.add_argument('--network', default=3, choices=[2, 3], type=int, help="network version. 2 or 3")
     parser.add_argument('--workers', default=12, type=int, help="number of data loading workers")
 
     args = parser.parse_args()
@@ -121,7 +120,7 @@ def main():
     args.weights = 1 / torch.log(args.instances / args.instances.sum() + 1.02)
     args.weights /= args.weights.sum()
 
-    if not os.path.exists(args.output_dir):
+    if not os.path.exists(args.output_dir) and args.nsamples > 0:
         os.makedirs(args.output_dir)
 
     # PYTORCH VERSION > 1.0.0
@@ -139,16 +138,10 @@ def main():
             torchvision.transforms.ToTensor(),
             normalize,
         ])
-
     testset = CityScapeLoader(args.data_folder, "test", transforms=transform, RandomHorizontalFlip=0.0, RandomVerticalFlip=0.0, mres=args.multires, transpose=args.transpose)
     test_loader = DataLoader(testset, batch_size=args.test_batch_size, shuffle=True, drop_last=False, num_workers=args.workers, pin_memory=True)
-    print(len(testset))
     # initialize and parallelize model
-    # initialize and parallelize model
-    if args.network == 2:
-        model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
-    elif args.network == 3:
-        model = PolygonNet3(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    model = PolygonNet(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
     model = nn.DataParallel(model)
     model.to(device)
 
@@ -167,14 +160,7 @@ def main():
         print("=> loading checkpoint '{}'".format(args.ckpt))
         checkpoint = torch.load(args.ckpt)
         args.best_miou = checkpoint['best_miou']
-        try:
-            model.load_state_dict(checkpoint['state_dict'])
-        except:
-            # simple hack for loading the old model
-            sdict = checkpoint['state_dict']
-            sdict['module.projection.1.weight'] = sdict.pop('module.projection.0.weight')
-            sdict['module.projection.1.bias']   = sdict.pop('module.projection.0.bias')
-            model.load_state_dict(sdict)
+        model.load_state_dict(checkpoint['state_dict'])
         print("=> loaded checkpoint '{}' (epoch {})"
               .format(args.ckpt, checkpoint['epoch']))
     else:
