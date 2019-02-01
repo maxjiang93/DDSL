@@ -6,9 +6,8 @@ import os
 import csv
 import numpy as np
 
-
 # Process data
-def processAirfoilData(directory='data'):
+def process_airfoil_data(directory='data'):
     '''
     Get airfoil shape from preprocessed numpy files and CFD
     information from webscraped csv files.
@@ -94,7 +93,7 @@ def processAirfoilData(directory='data'):
 
 
 # Fix data types in dataframe
-def fixDfDtypes(airfoil_df, datatypes=['str', 'str', 'float', 'float', 'float', 'float', 'float']):
+def fix_df_dtypes(airfoil_df, datatypes=['str', 'str', 'float', 'float', 'float', 'float', 'float']):
     # Fix data types
     airfoil_df['Name']=airfoil_df['Name'].astype(datatypes[0])
     airfoil_df['Directory']=airfoil_df['Directory'].astype(datatypes[1])
@@ -107,7 +106,7 @@ def fixDfDtypes(airfoil_df, datatypes=['str', 'str', 'float', 'float', 'float', 
     return airfoil_df
 
 
-def normalizeData(csv_file):
+def normalize_data(csv_file):
     norm_csv_file=csv_file.replace('.csv', '')+'_normalized.csv'
     mstd_csv_file=csv_file.replace('.csv', '')+'_mean_std.csv'
 
@@ -123,14 +122,14 @@ def normalizeData(csv_file):
 
 
 # Run process airfoil data function
-airfoil_df=processAirfoilData()
+airfoil_df=process_airfoil_data()
 
 # Run fix data types function
-airfoil_df=fixDfDtypes(airfoil_df)
+airfoil_df=fix_df_dtypes(airfoil_df)
 airfoil_df.dtypes
 
 # Save dataframe
 airfoil_df.to_csv('processed_data/airfoil_data.csv')
 
 # Create normalized data csv and save mean and standard deviation values
-normalizeData('processed_data/airfoil_data.csv')
+normalize_data('processed_data/airfoil_data.csv')

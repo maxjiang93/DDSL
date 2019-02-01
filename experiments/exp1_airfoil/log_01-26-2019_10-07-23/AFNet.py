@@ -23,7 +23,7 @@ class AFNet(nn.Module):
         # Resize shape into 4D tensor for input
         x=shapes.view(-1, 1, 224, 224)
         
-        # Resnet-50
+        # Go through Resnet
         x=self.resnet(x)
         x=self.bn(x)
         x=F.relu(x)
@@ -31,7 +31,7 @@ class AFNet(nn.Module):
         # Append CFD data
         x=self.append_cfd_data(x, cfd_data)
         
-        # Fully connected layers
+        # Fully connected layer
         x=F.relu(self.bn1(self.fc1(x)))
         x=F.relu(self.bn2(self.fc2(x)))
         x=self.fc3(x)

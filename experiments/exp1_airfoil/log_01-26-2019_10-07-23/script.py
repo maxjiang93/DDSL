@@ -16,6 +16,13 @@ import datetime
 
 from sklearn.metrics import r2_score
 
+# import multiprocessing as mp
+# mp.set_start_method('spawn', force=True)
+
+# Define mean squared error function
+def MSE(predicted, labels):
+    return torch.mean((predicted-labels)**2, dim=0)
+
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='Train AFNet')
@@ -25,6 +32,8 @@ def main():
                         help='number of channels out of AFNet, i.e. number of training objectives (default:2)')
     parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
+#     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
+#                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
@@ -52,6 +61,9 @@ def main():
                         help='uses given checkpoint file')
 
     args = parser.parse_args()
+    
+    # Clear cuda gpu cache
+    torch.cuda.empty_cache()
 
     # Make log directory and files
     if args.log_dir=="":
@@ -91,8 +103,10 @@ def main():
     kwargs = {'num_workers': 12, 'pin_memory': True} if use_cuda else {}
     trainset = AirfoilDataset(csv_file=args.data_file, shape_dir=args.shape_dir, set_type='train')
     validset = AirfoilDataset(csv_file=args.data_file, shape_dir=args.shape_dir, set_type='valid')
+#     testset = AirfoilDataset(csv_file=args.data_file, shape_dir=args.shape_dir, set_type='test')
     trainloader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True,**kwargs)
     validloader = DataLoader(validset, batch_size=args.batch_size, shuffle=True, **kwargs)
+#     testloader = DataLoader(testset, batch_size=args.batch_size, shuffle=True, set_type='test', **kwargs)
     print('\nTraining on '+str(len(trainset))+' data points.')
     print('Validating on '+str(len(validset))+' data points.\n')
     
