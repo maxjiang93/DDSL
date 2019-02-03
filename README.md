@@ -6,7 +6,7 @@ By: [Chiyu "Max" Jiang](www.maxjiang.ml), [Dana Lansigan](http://dlansigan.githu
 <img src="./doc/teaser.png" alt="DDSL_teaser" width=400>
 
 ### Introduction
-This repository is based on paper: [DDSL: Deep Differential Simplex Layer for Neural Networks](). The [project webpage]() presents an overview of the project. 
+This repository is based on paper: [DDSL: Deep Differential Simplex Layer for Neural Networks](https://arxiv.org/abs/1901.11082). The [project webpage]() presents an overview of the project. 
 
 In this project, we present a novel neural network layer that performs differentiable rasterization of arbitrary simplex-mesh-based geometrical signals (e.g., point clouds, line mesh, triangular mesh, tetrahedron mesh, polygon and polyhedron) of arbitrary dimensions. We further provide examples of incorporating the DDSL into neural networks for tasks such as polygonal image segmentation and neural shape optimization (for MNIST digits and airfoils).
 
