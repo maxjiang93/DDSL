@@ -13,18 +13,30 @@ import matplotlib.pyplot as plt
 from shapely.geometry import Polygon
 
 from ddsl import *
-from loader import poly2ve
 
 def plot_airfoil(f, name):
+    '''
+    Plots rasterized airfoil image and returns figure.
+    :param f: physical image of airfoil after DDSL transformation
+    :param name: name of airfoil
+    '''
     fig=plt.figure(figsize=(10, 5))
     ax1=fig.add_subplot(111)
-    im1=ax1.imshow(torch.squeeze(f).detach().cpu().numpy(), origin='lower')
+    im1=ax1.imshow(torch.squeeze(f).detach().cpu().numpy(), origin='lower', cmap='gray')
     fig.colorbar(im1)
     ax1.set_title(name)
     return fig
 
-def construct_VED(airfoil, device):
+def construct_VED(airfoil, device, grad):
+    '''
+    Constructs V, E, and D tensors for DDSL.
+    :param airfoil: name of airfoil
+    :param device: name of device to be used (e.g., 'cuda', 'cpu')
+    :param grad: sets requires_grad for V to True or False
+    '''
     assert isinstance(airfoil, str)
+    
+    torch.manual_seed(1)
    
     dev = torch.device(device)
     
@@ -69,43 +81,50 @@ def construct_VED(airfoil, device):
     D = torch.ones(E.shape[0], 1, dtype=V.dtype)
     
     V, E, D = V.to(dev), E.to(dev), D.to(dev)
-    V.requires_grad = True
+    V.requires_grad = grad
     
     return V, E, D
 
-def airfoil_spec(airfoil, res, t=(1,1), save_name=None, device='cuda'):
+def airfoil_spec(airfoil, res, t=(1,1), save_name=None, device='cuda', grad=True):
+    '''
+    Performs DDSL transformation on airfoil polygon into the spectral domain.
+    :param airfoil: name of airfoil.
+    :param res: n_dims int tuple of number of frequency modes
+    :param t: n_dims tuple of period in each dimension
+    :param device: name of device to be used (e.g., 'cuda', 'cpu')
+    :param grad: sets requires_grad for V to True or False
+    '''
     # Construct V, E, and D
-    V, E, D = construct_VED(airfoil, device)
+    V, E, D = construct_VED(airfoil, device, grad)
     
     # NUFT of airfoil
     ddsl_spec=DDSL_spec(res,t,2,1)
-    ddsl_spec=nn.DataParallel(ddsl_spec)
     F = ddsl_spec(V,E,D)
 
     # Save spectral image of airfoil, if save name provided
     if save_name!=None:
-        torch.save(F,save_name)
+        torch.save(F.cpu(),save_name)
 
     return F
 
-def airfoil_phys(airfoil, res, t=(1,1), save_name=None, device='cuda'):
+def airfoil_phys(airfoil, res, t=(1,1), save_name=None, device='cuda', grad=True):
+    '''
+    Performs DDSL transformation on airfoil polygon into the physical domain.
+    :param airfoil: name of airfoil.
+    :param res: n_dims int tuple of number of frequency modes
+    :param t: n_dims tuple of period in each dimension
+    :param device: name of device to be used (e.g., 'cuda', 'cpu')
+    :param grad: sets requires_grad for V to True or False
+    '''
     # Construct V, E, and D
-    V, E, D = construct_VED(airfoil, device)
+    V, E, D = construct_VED(airfoil, device, grad)
     
     # NUFT of airfoil + irfft
     ddsl_phys=DDSL_phys(res,t,2,1)
-    ddsl_phys=nn.DataParallel(ddsl_phys)
     f = ddsl_phys(V,E,D)
 
     # Save physical image of airfoil, if save name provided
     if save_name!=None:
-        torch.save(f,save_name)
+        torch.save(f.cpu(),save_name)
 
     return f
-
-def format_F():
-    if self.filter is not None:
-        self.filter = self.filter.to(F.device)
-        F *= self.filter # [dim0, dim1, dim2, n_channel, 2]
-    dim = len(self.res)
-    F = F.permute(*([dim] + list(range(dim)) + [dim+1])) # [n_channel, dim0, dim1, dim2, 2]

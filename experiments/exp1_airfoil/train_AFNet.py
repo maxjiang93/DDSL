@@ -16,13 +16,6 @@ import datetime
 
 from sklearn.metrics import r2_score
 
-import multiprocessing as mp
-mp.set_start_method('spawn', force=True)
-
-# Define mean squared error function
-def MSE(predicted, labels):
-    return torch.mean((predicted-labels)**2, dim=0)
-
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='Train AFNet')
@@ -32,8 +25,6 @@ def main():
                         help='number of channels out of AFNet, i.e. number of training objectives (default:2)')
     parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
-#     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-#                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
@@ -61,9 +52,6 @@ def main():
                         help='uses given checkpoint file')
 
     args = parser.parse_args()
-    
-    # Clear cuda gpu cache
-#    torch.cuda.empty_cache()
 
     # Make log directory and files
     if args.log_dir=="":
@@ -100,18 +88,17 @@ def main():
 
     # Create datasets and dataloaders
     print('\nLoading data...')
-    kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
+    kwargs = {'num_workers': 12, 'pin_memory': True} if use_cuda else {}
     trainset = AirfoilDataset(csv_file=args.data_file, shape_dir=args.shape_dir, set_type='train')
     validset = AirfoilDataset(csv_file=args.data_file, shape_dir=args.shape_dir, set_type='valid')
-#     testset = AirfoilDataset(csv_file=args.data_file, shape_dir=args.shape_dir, set_type='test')
     trainloader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True,**kwargs)
     validloader = DataLoader(validset, batch_size=args.batch_size, shuffle=True, **kwargs)
-#     testloader = DataLoader(testset, batch_size=args.batch_size, shuffle=True, set_type='test', **kwargs)
     print('\nTraining on '+str(len(trainset))+' data points.')
     print('Validating on '+str(len(validset))+' data points.\n')
     
     # Get model
     net = AFNet(bottleneck=args.bottleneck, out_ch=args.out_ch)
+    net = net.double()
     if(torch.cuda.device_count()>1):
         print('\nUsing', torch.cuda.device_count(), 'GPUs.')
         net=nn.DataParallel(net)
@@ -163,13 +150,12 @@ def main():
         for i, data in enumerate(validloader, 0):
             # Get inputs
             shapes=data['shape']
-            shapes=torch.cat((shapes,torch.zeros(shapes.shape[0], shapes.shape[1], 1, shapes.shape[3])), dim=2)
-            shapes=torch.Tensor(shapes)
-            shapes=shapes.float().to(device)
-            cfd_data=torch.cat((data['Re'].view(-1, 1), data['aoa'].view(-1, 1)), 1).float().to(device)
-
+            shapes=shapes.to(device)
+            cfd_data=torch.cat((data['Re'].view(-1, 1), data['aoa'].view(-1, 1)), 1)
+            cfd_data=cfd_data.to(device)
+            
             # Get labels
-            labels=data['Cl/Cd'].view(-1, 1).float().to(device)
+            labels=data['Cl/Cd'].view(-1, 1).to(device)
             labels=labels.to(device)
 
             # Forward
@@ -180,7 +166,7 @@ def main():
             valid_running_loss+=loss.item()
 
             # Accuracy
-            r2=r2_score(labels.data, outputs.data)
+            r2=r2_score(labels.cpu().detach().numpy(), outputs.cpu().detach().numpy())
             acc_valid+=r2
 
             # Write to log
@@ -190,13 +176,12 @@ def main():
         for i, data in enumerate(trainloader, 0):
             # Get inputs
             shapes=data['shape']
-            shapes=torch.cat((shapes,torch.zeros(shapes.shape[0], shapes.shape[1], 1, shapes.shape[3])), dim=2)
-            shapes=torch.Tensor(shapes)
-            shapes=shapes.float().to(device)
-            cfd_data=torch.cat((data['Re'].view(-1, 1), data['aoa'].view(-1, 1)), 1).float().to(device)
+            shapes=shapes.to(device)
+            cfd_data=torch.cat((data['Re'].view(-1, 1), data['aoa'].view(-1, 1)), 1)
+            cfd_data=cfd_data.to(device)
 
             # Get labels
-            labels=data['Cl/Cd'].view(-1, 1).float().to(device)
+            labels=data['Cl/Cd'].view(-1, 1).to(device)
             labels=labels.to(device)
         
             # Zero gradients
@@ -213,7 +198,7 @@ def main():
             optimizer.step()
 
             # Accuracy
-            r2=r2_score(labels.data, outputs.data)
+            r2=r2_score(labels.cpu().detach().numpy(), outputs.cpu().detach().numpy())
             acc_train+=r2
 
             # Running loss
