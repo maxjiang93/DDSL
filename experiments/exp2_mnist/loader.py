@@ -3,8 +3,10 @@ from shapely import geometry, affinity, wkt
 from sklearn.model_selection import train_test_split
 import json
 import pickle
-import sys; sys.path.append("../../methods")
-from transform import simplex_ft_cpu
+# import sys; sys.path.append("../../methods")
+import sys; sys.path.append("../../ddsl")
+# from transform import simplex_ft_cpu
+from ddsl import *
 from torch.utils.data import Dataset
 import os
 from shutil import rmtree
@@ -117,12 +119,11 @@ class PMNISTDataSet(Dataset):
         P = wkt.loads(self.plist[idx])
         V, E = poly2ve(P)
         V += 1e-6*np.random.rand(*V.shape)
-        F = simplex_ft_cpu(V, E, np.ones((E.shape[0], 1)), res=(self.imsize+2, self.imsize+2), t=(1,1), j=2)
-        F = np.squeeze(F)
-        half = int(self.imsize/2+1)
-        F = np.concatenate((F[:half], F[half+2:]), axis=0)
-        input_ = np.stack([np.real(F), np.imag(F)], axis=-1).astype(np.float32)
-        input_ = np.expand_dims(input_, 0)
+        V=torch.tensor(V, dtype=torch.float64, requires_grad=False)
+        E=torch.LongTensor(E)
+        D = torch.ones(E.shape[0], 1, dtype=torch.float64)
+        ddsl_phys=DDSL_phys((self.imsize,self.imsize),(1,1),2,1)
+        input_ = ddsl_phys(V,E,D)
         label_ = self.label[idx]
         r = {"input": input_, 
              "label": label_}

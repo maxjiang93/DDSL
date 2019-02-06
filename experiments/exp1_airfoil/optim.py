@@ -319,7 +319,7 @@ def main():
     parser.add_argument('--airfoil', type=str, help='name of input airfoil to optimize', required=True)
     parser.add_argument('-r', '--Re', type=float, default=1e6, help='Reynolds number of flow')
     parser.add_argument('-a', '--aoa', type=float, default=0, help='airfoil angle of attack')
-    parser.add_argument('-c', '--C', type=str, default='example.txt', help='control points text file (default: example.txt)')
+    parser.add_argument('--C', type=str, help='control points text file', required=True)
     parser.add_argument('--target', type=float, help='target lift-drag ratio', required=True)
     parser.add_argument('--savefile', type=str, help='save file path', required=True)
     parser.add_argument('--savedir', type=str, default='optim', help='save file directory (default: optim)')
@@ -337,6 +337,7 @@ def main():
     # make save directory
     if not os.path.exists(args.savedir):
         os.mkdir(args.savedir)
+    savefile=os.path.join(args.savedir, args.savefile)
                         
     # load CFD datafiles
     filepath=args.datadir
