@@ -6,7 +6,7 @@ Airfoil data from [airfoiltools.com](http://airfoiltools.com/) was used for this
 python3 scraper.py
 ```
 
-Some post-processing was done to remove data incorrectly recorded by `airfoiltools`. As there was no pattern in the incorrect data, the post-processing was done manually. The cleaned dataset can be downloaded using the data download shell script:
+Some post-processing was done to remove data incorrectly recorded by airfoiltools. As there was no pattern in the incorrect data, the post-processing was done manually. The cleaned dataset can be downloaded using the data download shell script:
 ``` bash
 chmod +x *.sh
 ./get_data.sh
