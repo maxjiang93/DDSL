@@ -25,7 +25,7 @@ class LeNet5(nn.Module):
         self.signal_sizes = signal_sizes
 
     def forward(self, x):
-        x = torch.irfft(x, 2, signal_sizes=self.signal_sizes)
+        x = x.view(-1, 1, self.signal_sizes[0], self.signal_sizes[1])
         x = self.norm(x)
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
