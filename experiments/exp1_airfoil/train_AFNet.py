@@ -63,7 +63,7 @@ def main():
         os.mkdir(log_dir)
     shutil.copy2(__file__, os.path.join(log_dir, "script.py"))
     shutil.copy2("AFNet.py", os.path.join(log_dir, "AFNet.py"))
-    shutil.copy2("run.sh", os.path.join(log_dir, "run.sh"))
+    shutil.copy2("train.sh", os.path.join(log_dir, "train.sh"))
 
     logger = logging.getLogger("train")
     logger.setLevel(logging.DEBUG)
