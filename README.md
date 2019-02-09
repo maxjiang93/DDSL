@@ -20,7 +20,16 @@ To replicate the experiments in our paper, please refer to codes in the [experim
 
 ### Citation
 If you find our code useful for your work, please consider citing our paper:
-TODO: ADD ArXiV bib entry.
+```
+@misc{jiang2019ddsl,
+    title={DDSL: Deep Differentiable Simplex Layer for Learning Geometric Signals},
+    author={Chiyu "Max" Jiang and Dana Lynn Ona Lansigan and Philip Marcus and Matthias Nießner},
+    year={2019},
+    eprint={1901.11082},
+    archivePrefix={arXiv},
+    primaryClass={cs.CV}
+}
+```
 
 ### Contact
 Please contact [Max Jiang](mailto:maxjiang93@gmail.com) if you have further questions!
