@@ -131,6 +131,7 @@ def main():
     testloader = DataLoader(testset, batch_size=args.batch, shuffle=True, num_workers=args.jobs)
 
     model = LeNet5((args.imsize, args.imsize), MEAN, STD)
+    model = model.double()
     if args.optim == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
     else:

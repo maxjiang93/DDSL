@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from math import factorial
+import os
 
 
 def fftfreqs(res, dtype=torch.float32, exact=True):
@@ -214,3 +215,23 @@ def spec_gaussian_filter(res, sig):
     filter_ = torch.exp(-0.5*((sig*2*dis/res[0])**2)).unsqueeze(-1).unsqueeze(-1)
     filter_.requires_grad = False
     return filter_
+
+def readOBJ(filename, check=True):
+    assert(os.path.exists(filename) and filename[-4:] == '.obj')
+    f = open(filename, 'r')
+    lines = f.readlines()
+    V = []
+    F = []
+    for l in lines:
+        llist = l.rstrip('\n').split(' ')
+        if llist[0] in ['v', 'V']:
+            V.append([float(llist[1]), float(llist[2]), float(llist[3])])
+        elif llist[0] in ['f', 'F']:
+            if check:
+                if llist[1] != llist[2] and llist[1] != llist[3]:
+                    F.append([int(llist[1]), int(llist[2]), int(llist[3])])
+            else:
+                F.append([int(llist[1]), int(llist[2]), int(llist[3])])
+    V = np.array(V)
+    F = np.array(F)-1
+    return V, F

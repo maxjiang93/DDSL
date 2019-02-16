@@ -51,7 +51,6 @@ class BatchedRasterLoss2D(nn.Module):
         """
         V = V.double()
         b = V.shape[0]
-
         f = torch.stack(tuple([self.ddsl(V[i], self.E, self.D).squeeze(-1) for i in range(b)]), dim=0) # [N, res, res]
         # loss
         if self.loss == 'l1':
@@ -93,58 +92,6 @@ class PeriodicUpsample1D(nn.Module):
         x = self.conv1d(x)
         return x
 
-class PolygonNet(nn.Module):
-    def __init__(self, encoder=models.resnet50(pretrained=True), npoints=128):
-        super(PolygonNet, self).__init__()
-        self.npoints = npoints
-        self.encoder = nn.Sequential(*list(encoder.children())[:-1])
-        self.projection = nn.Sequential(
-            nn.Linear(2048, 512),
-            nn.ReLU()
-            )
-        # output of encoder (after projection) is  [N, 512, 1]
-        self.decoder = nn.Sequential(
-            PeriodicUpsample1D(512, 256), # [N, 256,   2]
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            PeriodicUpsample1D(256, 128), # [N, 128,   4]
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            PeriodicUpsample1D(128,  64), # [N,  64,   8]
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            PeriodicUpsample1D( 64,  32), # [N,  32,  16]
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
-            PeriodicUpsample1D( 32,  16), # [N,  16,  32]
-            nn.BatchNorm1d(16),
-            nn.ReLU(),
-            PeriodicUpsample1D( 16,   8), # [N,   8,  64]
-            nn.BatchNorm1d(8),
-            nn.ReLU(),
-            PeriodicUpsample1D(  8,   4), # [N,   4, 128]
-            nn.BatchNorm1d(4),
-            nn.ReLU(),
-            nn.Conv1d(4, 2, 1, 1, 0),     # [N,   2, 128]
-            nn.Sigmoid() # squash output to (0,1)
-            )
-        offsets = 1e-4*torch.rand(self.npoints, 2, dtype=torch.float64)
-        self.register_buffer("offsets", offsets)
-
-    def forward(self, x):
-        """
-        :param x: [N, C, H, W], where C=3, H=W=224, input image
-        :return [N, 128, 2] segmentation polygons
-        """
-        x = self.encoder(x)
-        x = x.squeeze(-1).squeeze(-1) # [N, 2048]
-        x = self.projection(x).unsqueeze(-1) # [N, 512, 1]
-        x = self.decoder(x)
-        x = x.permute(0, 2, 1).double()
-        x += self.offsets
-        return x
-
-
 # NEW ARCHITECTURE
 
 class DecodeLeaf(nn.Module):
@@ -181,101 +128,15 @@ class DropoutLayer(nn.Module):
         x = x.squeeze(-1)
         return x
 
-class PolygonNet2(nn.Module):
-    def __init__(self, encoder=models.resnet50(pretrained=True), nlevels=5, dropout=False, feat=256):
-        super(PolygonNet2, self).__init__()
-        self.p = 0.5 if dropout else 0
-        self.base = feat
-        self.nlevels = nlevels
-        self.npoints = 3+3*(2**nlevels-1)
-        self.encoder = nn.Sequential(*list(encoder.children())[:-1])
-        self.projection = nn.Sequential(
-            nn.Dropout(p=self.p),
-            nn.Linear(2048, 3*self.base),
-            nn.ReLU(),
-            )
-        # output of encoder (after projection and reshape) is  [N, 256, 3]
-        self.decoder_stem = []
-        for i in range(self.nlevels-1):
-            c_in = int(self.base / (2**i))
-            c_out = int(self.base / (2**(i+1)))
-            self.decoder_stem.append(
-                nn.Sequential(
-                    PeriodicUpsample1D(c_in, c_out),
-                    nn.BatchNorm1d(c_out),
-                    nn.ReLU()
-                    )
-                )
-
-        self.decoder_leaf = []
-        for i in range(self.nlevels):
-            c_in = int(self.base / (2**i))
-            self.decoder_leaf.append(DecodeLeaf(c_in))
-
-        self.decoder_stem = nn.ModuleList(self.decoder_stem)
-        self.decoder_leaf = nn.ModuleList(self.decoder_leaf)
-
-        self.conv1x1 = nn.Conv1d(self.base, 2, 1, 1, 0)
-        
-        offsets = 1e-4*torch.rand(self.npoints, 2, dtype=torch.float64)
-        rot = torch.tensor([[0.0, -1.0], [1.0, 0.0]], dtype=torch.float32)
-        self.register_buffer("offsets", offsets)
-        self.register_buffer("rot", rot)
-
-    def forward(self, x):
-        """
-        :param x: [N, C, H, W], where C=3, H=W=224, input image
-        :return [N, 128, 2] segmentation polygons
-        """
-        x = self.encoder(x)
-        x = x.squeeze(-1).squeeze(-1) # [N, 2048]
-        x = self.projection(x).view(-1, self.base, 3) # [N, 256, 3]
-        base_triangle = torch.sigmoid(self.conv1x1(x).permute(0, 2, 1)) # [N, 3, 2]
-
-        stem_values = [x]
-        leaf_values = []
-        for i in range(self.nlevels-1):
-            stem_values.append(self.decoder_stem[i](stem_values[-1]))
-        for i in range(self.nlevels):    
-            leaf_values.append(self.decoder_leaf[i](stem_values[i])) # [N, 3*2**i]
-        V = self._construct_polygon(base_triangle, leaf_values)
-        V += self.offsets
-        return V
-
-    def _construct_polygon(self, base_triangle, leaf_values):
-        V = base_triangle
-        for diff in leaf_values:
-            V = self._add_resolution(V, diff)
-        V = V.double()
-        return V
-
-    def _add_resolution(self, V, diff):
-        """
-        :param V: shape [N, nv, 2]
-        :param diff: shape [N, nv]
-        """
-        N = V.shape[0]
-        nv = V.shape[1]
-        seq = list(range(1, nv)) + [0]
-        V_next = V[:, seq, :] # [N, nv, 2]
-        V_mid = (V + V_next) / 2
-        V_dir = (V_next - V) / torch.norm(V_next - V, dim=2, keepdim=True) # [N, nv, 2]
-        V_per = torch.matmul(V_dir, self.rot) # [N, nv, 2]
-        V_new = V_mid + V_per * diff.unsqueeze(-1)
-        
-        V_out = torch.stack((V, V_new), dim=2).view(N, nv*2, 2)
-        # V_out = torch.clamp(V_out, 0, 0.99) # clip output value
-        return V_out
-
 class Flatten(nn.Module):
     def __init__(self):
         super(Flatten, self).__init__()
     def forward(self, x):
         return x.view(x.shape[0], -1)
 
-class PolygonNet3(nn.Module):
+class PolygonNet(nn.Module):
     def __init__(self, encoder=models.resnet50(pretrained=True), nlevels=5, dropout=False, feat=256):
-        super(PolygonNet3, self).__init__()
+        super(PolygonNet, self).__init__()
         self.p = 0.5 if dropout else 0
         self.base = feat
         self.nlevels = nlevels

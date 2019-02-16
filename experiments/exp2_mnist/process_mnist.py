@@ -8,7 +8,7 @@ from mnist import MNIST
 from tqdm import tqdm
 import os
 import json
-from joblib import Parallel, delayed
+# from joblib import Parallel, delayed
 from math import ceil
 import os
 
@@ -65,34 +65,6 @@ def poly2ve(Poly):
         E = np.concatenate(E, axis=0)
     return V, E
 
-def polyfft2(V, E, r=(128, 128), T=128):
-    """
-    V(float), E(int) are the vertex and edge matrices
-    r is resolution len = 2 array
-    Counter-clockwise is positive
-    """
-    assert V.shape[1] == 2
-    if V.max()<=1:
-        V *= T
-    eps = 1e-5
-    omega = 2 * np.pi / T
-    V += eps * np.random.rand(*(V.shape))
-    ulin = np.linspace(-r[0]/2, r[0]/2-1, r[0])
-    vlin = np.linspace(0, r[1]/2, int(r[1]/2)+1)
-    U_, V_ = np.meshgrid(ulin, vlin, indexing='ij')
-    U_ += eps
-    V_ += eps
-    U_ *= omega
-    V_ *= omega
-    F = np.zeros(shape=U_.shape, dtype=np.complex_)
-    for ei in range(E.shape[0]):
-        x1, y1 = V[E[ei, 0], 0], V[E[ei, 0], 1]
-        x2, y2 = V[E[ei, 1], 0], V[E[ei, 1], 1]
-        Fn = np.exp(-1j*(U_*(x1+x2)+V_*(y1+y2)))*(np.exp(1j*(U_*x1+V_*y1))-np.exp(1j*(U_*x2+V_*y2)))*(x1-x2)/ \
-             (V_*(U_*(x1-x2)+V_*(y1-y2)))
-        F += Fn
-    return F
-
 def mnist2poly(image, hd_dim=64, wkt=False):
     image = np.flipud(image)
     # upsample in freq domain
@@ -130,36 +102,6 @@ def mnist2poly(image, hd_dim=64, wkt=False):
     else:
         return P
 
-def poly2bin(p, dim, output=None):
-    N = dim
-    xlin, ylin = np.linspace(0, 1, N), np.linspace(0, 1, N)
-    X, Y = np.meshgrid(xlin, ylin)
-    X, Y = X.ravel(), Y.ravel()
-    Z = np.zeros(*X.shape).ravel()
-    for i, (x, y) in enumerate(zip(X, Y)):
-        Z[i] = float(P.contains(geometry.Point([x, y])))
-    Z = Z.reshape([N, N])
-    if output is None:
-        return Z
-    elif isinstance(output, str):
-        imsave(output, Z)
-
-def poly2phys(p, dim, upres=1, output=None):
-    N = dim
-    V, E = poly2ve(P)
-    F = polyfft2(V, E, r=(N, N), T=N)
-    if upres > 1:
-        n = dim*upres
-        w = int((n-dim)/2)
-        F = np.pad(F, ((w, w), (0, w)), 'constant')
-    F_ = np.fft.ifftshift(F, axes=(0))
-    f = np.fft.irfft2(F_) * (upres) ** 2
-    f = f.T
-    if output is None:
-        return f
-    elif isinstance(output, str):
-        imsave(output, f)
-
 def process_mnist2poly(input_list, outfile, hd_dim=64):
     """
     Process images in mnist dataset given list of images
@@ -175,8 +117,8 @@ def process_mnist2poly(input_list, outfile, hd_dim=64):
 
     with open(outfile, 'w') as outputfile:
         json.dump(P_list, outputfile)
-    if prog_bar:
-        pbar.close()
+
+    pbar.close()
 
 
 def main():

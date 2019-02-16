@@ -6,7 +6,7 @@ import torch
 import torchvision
 import torch.nn as nn
 import argparse
-from model import PolygonNet2
+from model import PolygonNet
 from tqdm import tqdm
 import json
 import numpy as np
@@ -14,22 +14,8 @@ import PIL
 from random import shuffle
 import cv2
 
+
 EPS = 1e-7
-
-def batch_smooth(polygons, steps=0, lambda_=.5):
-    """
-    batched laplacian smoothing for post-processing
-    :param polygons: shape (N, L, 2)
-    :param steps: number of steps
-    """
-    L = polygons.shape[1]
-    for _ in range(steps):
-        next_ = list(range(1, L)) + [0]
-        prev_ = [L-1] + list(range(L-1))
-        lap = 0.5*(polygons[:, next_]+polygons[:, prev_]) - polygons
-        polygons += lambda_ * lap
-    return polygons
-
 
 def batch_transform(inputs, transform):
     """
@@ -50,7 +36,7 @@ def batch_transform(inputs, transform):
 
 
 class visualizer(object):
-    def __init__(self, model, transform, mapping_dir, img_dir, partition='test', skip_multicomponents=False, export_gt=True, smooth_steps=3, lambda_=.5, rand_samp=False):
+    def __init__(self, model, transform, json_dir, img_dir, partition='test', skip_multicomponents=False, export_gt=True, rand_samp=False):
         assert(partition in ['train', 'test', 'val'])
         # partition names named differently
         if partition == 'test':
@@ -71,11 +57,11 @@ class visualizer(object):
             ]
         self.model = model
         self.transform = transform
-        self.mapping_dir = mapping_dir
+        self.json_dir = json_dir
         self.img_dir = img_dir
         self.skip_multicomponents = skip_multicomponents
         self.export_gt = export_gt
-        self.flist = sorted(glob(os.path.join(mapping_dir, self.p, "*", "*.json")))
+        self.flist = sorted(glob(os.path.join(json_dir, self.p, "*", "*.json")))
         self.rand_samp = rand_samp
         if self.rand_samp:
             shuffle(self.flist)
@@ -83,8 +69,6 @@ class visualizer(object):
         self.max_poly_len = 71
         self.min_area = 100
         self.sub_th = 0
-        self.smooth_steps = smooth_steps
-        self.lambda_ = lambda_
 
     def __len__(self):
         return len(self.flist)
@@ -98,7 +82,7 @@ class visualizer(object):
         elif isinstance(file, str):
             mfile = file.split('/')[-1].split('.')[0].replace('_leftImg8bit', '')
             city = mfile.split('_')[0]
-            mfile = os.path.join(self.mapping_dir, self.p, city, mfile+".json")
+            mfile = os.path.join(self.json_dir, self.p, city, mfile+".json")
         else:
             print("[!] ERROR: index by integer or by file name only!")
             assert(0)
@@ -119,9 +103,6 @@ class visualizer(object):
         inputs = batch_transform(crops, self.transform)
         pred_poly = self.model(inputs).detach().cpu().numpy()
         pred_poly = pred_poly[..., ::-1]
-
-        # smooth polygons
-        pred_poly = batch_smooth(pred_poly, steps=self.smooth_steps, lambda_=self.lambda_) 
         
         # backproject polygons onto image
         gt_polygons = [d['poly'] for d in instance_dicts]
@@ -214,7 +195,7 @@ class visualizer(object):
         new_img[top_margin: top_margin + patch_img.shape[0], :, ] = patch_img
 
         new_img = transform.rescale(new_img, scale_factor, order=1, 
-            preserve_range=True, multichannel=True)
+            preserve_range=True)
         new_img = new_img.astype(np.float32)
         #assert new_img.shape == [self.opts['img_side'], self.opts['img_side'], 3]
 
@@ -285,20 +266,17 @@ class visualizer(object):
 def main():
     # Test settings
     parser = argparse.ArgumentParser(description='Segmentation')
-    # parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_new2_resume_2019_01_10_16_01_56/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
-    parser.add_argument('--ckpt', type=str, default='/home/maxjiang/Codes/dsnet/experiments/exp3_segmentation/logs/net2_drop_l5_f256_2019_01_12_12_13_54/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
-    parser.add_argument('--nlevels', type=int, default=5, help="number of polygon levels, higher->finer")
+    parser.add_argument('--ckpt', type=str, default='checkpoint/checkpoint_polygonnet_best.pth.tar', help="path to checkpoint to load")
+    parser.add_argument('--nlevels', type=int, default=4, help="number of polygon levels, higher->finer")
     parser.add_argument('--feat', type=int, default=256, help="number of base feature layers")
     parser.add_argument('--dropout', action='store_true', help="dropout during training")
     parser.add_argument('--raw_img_dir', type=str, default='leftImg8bit', help='path to raw image directory')
-    parser.add_argument('--mapping_dir', type=str, default='cityscapes_mapping', help='path to mapping directory')
+    parser.add_argument('--polyrnn2_dir', type=str, default='polyrnn-pp-pytorch-small')
     parser.add_argument('--gpuid', type=int, default=0, help='gpu id to use for evaluation')
     parser.add_argument('--output_dir', type=str, default='output_vis_full', help='directory to output images')
     parser.add_argument('--nsamples', type=int, default=10, help='number of samples to produce. 0 for all.')
     parser.add_argument('--export_gt', action='store_true', help='export ground truth images also')
     parser.add_argument('--skip_multicomponents', action='store_true', help='skip multiple components')
-    parser.add_argument('--smooth_steps', type=int, default=3, help='number of laplacian smoothing steps')
-    parser.add_argument('--lambda_', type=int, default=0.5, help='smoothing lambda in (0, 1)')
     parser.add_argument('--rand_samp', action='store_true', help='randomly draw samples to save')
 
     args = parser.parse_args()
@@ -324,7 +302,7 @@ def main():
         ])
 
     # load model
-    model = PolygonNet2(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
+    model = PolygonNet(nlevels=args.nlevels, dropout=args.dropout, feat=args.feat)
     model = nn.DataParallel(model)
     model.to(device)
     
@@ -346,8 +324,9 @@ def main():
         print("=> no checkpoint found at '{}'".format(args.ckpt))
 
     # create and save visualizations
-    vis = visualizer(model=model, transform=transform, mapping_dir=args.mapping_dir, img_dir=args.raw_img_dir, skip_multicomponents=args.skip_multicomponents, export_gt=args.export_gt, smooth_steps=args.smooth_steps, lambda_=args.lambda_, rand_samp=args.rand_samp)
-    if args.nsamples < 1:
+    args.json_dir = os.path.join(args.polyrnn2_dir, 'data', 'cityscapes_final_v5')
+    vis = visualizer(model=model, transform=transform, json_dir=args.json_dir, img_dir=args.raw_img_dir, skip_multicomponents=args.skip_multicomponents, export_gt=args.export_gt, rand_samp=args.rand_samp)
+    if args.nsamples < 0:
         args.nsamples = len(vis)
     for i in tqdm(range(args.nsamples)):
         if args.export_gt:

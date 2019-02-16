@@ -9,9 +9,9 @@ import numpy as np
 from copy import deepcopy
 import sys
 sys.path.append("../../ddsl/")
-import types
-import json
 from ddsl import *
+from airfoil_NUFT import *
+from AFNet import AFNet
 import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.path import Path
@@ -20,39 +20,36 @@ from numpy import asarray, concatenate, ones
 from shapely.geometry import *
 import matplotlib.pyplot as plt
 from matplotlib import animation
-from loader import poly2ve
+      
+class PolyAirfoils(object):
+    """
+    object for retrieving airfoil polygons
+    params:
+    airfoil: string airfoil name
+    """
+    def __init__(self, airfoil):
+        V,E,_=construct_VED(airfoil, 'cuda', True)
+        self.V=V
+        self.E=E
 
-MEAN = 0.14807655
-STD = 0.36801067
+    def __getitem__(self):
+        return self.V, self.E
 
-class PolyMNIST(object):
-    def __init__(self, path):
-        with open(os.path.join(path, "mnist_polygon_test.json"), 'r') as infile:
-            self.plist = json.load(infile)
-        with open(os.path.join(path, "mnist_label_test.json"), 'r') as infile:
-            self.label = json.load(infile)
-    def __getitem__(self, idx):
-        P = wkt.loads(self.plist[idx])
-        V, E = poly2ve(P)
-        return V, E, self.label[idx]
-    
-    def get_poly(self, idx):
-        P = wkt.loads(self.plist[idx])
+    def get_poly(self):
+        P=Polygon(self.V)
         return P
-    
-    def get_label(self, idx):
-        return self.label[idx]
 
 
 class ShapeOptimizer(object):
-    def __init__(self, polygon, C, model, target_cls, device):
+    def __init__(self, polygon, C, model, cfd_data, target, device):
         """
-        object for optimizing polygonal shapes (MNIST experiment)
+        object for optimizing polygonal shapes (airfoil experiment)
         params:
         polygon: shapely Polygon or MultiPolygon object.
         C: shape (#C, 2) control points
         model: trained pytorch model for inference.
-        target_cls: int. target class to convert to.
+        Re: Reynolds number
+        target: int. target class to convert to.
         device: pytorch device type
         """
         self.CPoly = CPolygon(polygon, C)
@@ -61,13 +58,13 @@ class ShapeOptimizer(object):
         self.polygon = [polygon]
         self.D = torch.ones(self.E.shape[0], 1, dtype=torch.float64)
         self.model = model
-        self.target_tensor = torch.tensor([target_cls]).to(device)
+        self.cfd_data=cfd_data
+        self.target_tensor = torch.tensor(target, dtype=torch.float64).view(-1,1).to(device)
         self.dV = None
         self.dC = None
-        self.res = self.model.module.signal_sizes[0]
+        self.res = 224
         self.profile = {"loss": [],
-                        "class": [],
-                        "confidence": []}
+                        "ClCd": []}
         
     def step(self, step_size=1e-3, sign=-1, stochastic=False):
         '''
@@ -106,32 +103,29 @@ class ShapeOptimizer(object):
         self
         """
         # convert polygon vertices to physical image w/ DDSL
-        ddsl_phys=DDSL_phys((self.res,self.res),(1,1),2,1)
+        ddsl_phys=DDSL_phys((224,224),(1,1),2,1)
         self.V=torch.tensor(self.V, dtype=torch.float64, requires_grad=True)
         self.E=torch.LongTensor(self.E)
         f = ddsl_phys(self.V,self.E,self.D)
-        
+    
         # compute loss wrt. target class
         self.model = self.model.double()
-        self.model.eval()
-        self.model.zero_grad()
-        logits = self.model(f)
-        loss = F.cross_entropy(logits, self.target_tensor)
-        prob = F.softmax(logits, dim=1)
-        _, pred = torch.max(logits.data, 1)
-        loss.backward()
+        self.model.eval()  
+        self.model.zero_grad()  
+        criterion=nn.MSELoss()
+        output=self.model(f, self.cfd_data)  
+        loss = criterion(output,self.target_tensor)  
+        loss.backward()  
         self.profile['loss'].append(loss.item()) # save loss at current iteration
-        self.profile['class'].append(pred.item())
-        self.profile['confidence'].append(prob[0, pred.item()].item())
+        self.profile['ClCd'].append(output.item())
 
         # compute grad on V
         self.dV = self.V.grad.detach().cpu().numpy()
-        
+      
         # compute grad on C
         dVdC = self.CPoly.dVdC
-        self.dC = np.einsum("ijkl,ij->kl", dVdC, self.dV)
+        self.dC = np.einsum("ijkl,ij->kl", dVdC, self.dV)       
                 
-        
 class CPolygon(object):
     def __init__(self, polygon, C):
         self.polygon = polygon
@@ -157,6 +151,7 @@ class CPolygon(object):
             a, b = self.C[i]
             Rot_trans = np.array([-a*np.cos(t)+b*np.sin(t)+a,
                                   -a*np.sin(t)-b*np.cos(t)+b])
+           
             Vnew += self.W[:, i:i+1] * (self.V.dot(Rot.T) + dC[i] + Rot_trans)
         self.V = Vnew # update vertices
         self.C += dC # update control points
@@ -244,7 +239,7 @@ class CPolygon(object):
                 ecount += v.shape[0]
             V = np.concatenate(V, axis=0)
             E = np.concatenate(E, axis=0)
-            
+        
         return V, E, E_segs
     
     def newPolygon(self, V):
@@ -265,7 +260,7 @@ class CPolygon(object):
             return polys[0]
         else:
             return geometry.MultiPolygon(polys)
-        
+
 def ring_coding(ob):
     # The codes will be all "LINETO" commands, except for "MOVETO"s at the
     # beginning of each subpath
@@ -290,7 +285,7 @@ def showPolygon(polygon):
     ax = fig.add_subplot(111)
 
     path = pathify(polygon)
-    patch = PathPatch(path, facecolor='#cccccc', edgecolor='#999999')
+    patch = PathPatch(path, facecolor='#339966', edgecolor='#999999')
 
     ax.add_patch(patch)
 
@@ -300,29 +295,38 @@ def showPolygon(polygon):
     
     return fig, ax    
 
-def update(frame_number, ax, step_size, savefile, mean, std, optim):
+def update(frame_number, ax, step_size, savefile, mean, std, optim, save_shape_as_txt):
     if frame_number > 0:
-        optim.step(step_size, sign=-1, stochastic=True)   
+        optim.step(step_size, sign=-1, stochastic=False)   
     path = pathify(optim.polygon[-1])
     patch = PathPatch(path, facecolor='#339966', edgecolor='#999999')
     ax.cla()
     ax.add_patch(patch)
     if frame_number > 0:
-        title = "Iter: {}, Loss: {:.4f}, Pred: {}, Prob: {:4f}".format(frame_number, optim.profile['loss'][-1], optim.profile['class'][-1], optim.profile['confidence'][-1])
+        ClCd=optim.profile['ClCd'][-1]*std+mean
+        title = "Iter: {}, Loss: {:_<6f}, Pred: {:_<6f}".format(frame_number, optim.profile['loss'][-1], ClCd)
+        x,y=optim.polygon[-1].exterior.xy
+        if save_shape_as_txt:
+            np.savetxt(savefile+str(frame_number).zfill(3)+'.txt',pd.DataFrame([x,y]).transpose().values)
     else:
         title = "Iter: {0}".format(frame_number)
     ax.set_title(title)
     print(title)
-    
+
 def main():
     # parse arguments
     parser = argparse.ArgumentParser(description='MNIST shape optimization')
-    parser.add_argument('--input', type=int, help='index of input MNIST shape to optimize')
+    parser.add_argument('--airfoil', type=str, help='name of input airfoil to optimize', required=True)
+    parser.add_argument('-r', '--Re', type=float, default=1e6, help='Reynolds number of flow')
+    parser.add_argument('-a', '--aoa', type=float, default=0, help='airfoil angle of attack')
     parser.add_argument('--C', type=str, help='control points text file', required=True)
-    parser.add_argument('--target', type=int, help='target number class', required=True)
+    parser.add_argument('--target', type=float, help='target lift-drag ratio', required=True)
     parser.add_argument('--savefile', type=str, help='save file path', required=True)
     parser.add_argument('--savedir', type=str, default='optim', help='save file directory (default: optim)')
+    parser.add_argument('-t','--save_shape_as_txt', action='store_true',default=False, help='save coordinates of shapes in each iteration as text files (default: False)')
     parser.add_argument('-l', '--logdir', type=str, default="log", help='log directory path (default: log)')
+    parser.add_argument('-b', '--bottleneck', type=int, default=1000, help='bottleneck parameter used for model (default: 1000)')
+    parser.add_argument('-d', '--datadir', type=str, default="processed_data", help='processed data directory path (default: processed_data)')
     parser.add_argument('-s', '--step_size', type=float, default=1e-3, help='step size for shape optimization (default: 1e-3)')
     parser.add_argument('-f', '--frames', type=int, default=100, help='number of frames for optimization animation (default: 100)')
     parser.add_argument('--no_cuda', action='store_true', help='do not use cuda')
@@ -334,47 +338,59 @@ def main():
     if not os.path.exists(args.savedir):
         os.mkdir(args.savedir)
     savefile=os.path.join(args.savedir, args.savefile)
-        
+                        
+    # load CFD datafiles
+    filepath=args.datadir
+    df=pd.read_csv(os.path.join(filepath, 'airfoil_data_normalized.csv')).drop(columns=['Unnamed: 0'])
+    df_orig=pd.read_csv(os.path.join(filepath, 'airfoil_data.csv')).drop(columns=['Unnamed: 0'])
+    stats=pd.read_csv(os.path.join(filepath, 'airfoil_data_mean_std.csv')).drop(columns=['Unnamed: 0'])
+    mean=stats['mean']
+    std=stats['std']
+                        
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    # Load the model
-    loader = importlib.machinery.SourceFileLoader('LeNet5', os.path.join(args.logdir, "model.py"))
-    mod = types.ModuleType(loader.name)
-    loader.exec_module(mod)
-
-    model = mod.LeNet5(mean=MEAN, std=STD)
+    # load the model
+    model=AFNet(bottleneck=args.bottleneck)
     if use_cuda:
         model = nn.DataParallel(model)
     model.to(device)
-    model.load_state_dict(torch.load(os.path.join(args.logdir, "checkpoint_final.pth.tar"))['state_dict'])
+    state=torch.load(os.path.join(args.logdir,"AFNet_model.checkpoint"))
+    model.load_state_dict(state['model'])
+    optimizer=torch.optim.Adam(model.parameters())
+    optimizer.load_state_dict(state['optim'])
 
-    # Shape Optimization
-    pmnist = PolyMNIST("data/polyMNIST")
-    P = pmnist.get_poly(args.input)
-    label = pmnist.get_label(args.input)
-    # control points
+    # get input airfoil shape and control points
+    pairfoils = PolyAirfoils(args.airfoil)
+    P = pairfoils.get_poly()
     C = np.loadtxt(args.C)
-    print("Original Label: {}".format(label))
-    optim = ShapeOptimizer(P, C, model, target_cls=args.target, device=device)
+
+    # normalize data
+    Re_in=torch.tensor((args.Re-mean[1])/std[1], dtype=torch.float64).view(-1,1)
+    aoa_in=torch.tensor((args.aoa-mean[0])/std[0], dtype=torch.float64).view(-1,1)
+    cfd_data=torch.cat((Re_in, aoa_in), 1)
+    target=(args.target-mean[4])/std[4]
+
+    # set up shape optimizer
+    optim = ShapeOptimizer(P, C, model, cfd_data=cfd_data, target=target, device=device)
     
     # optimize shape
     fig, ax = showPolygon(optim.polygon[-1])
     plt.close()
-    anim = animation.FuncAnimation(fig, update, interval=100, frames=args.frames, fargs=[ax, args.step_size, savefile, MEAN, STD, optim])
+    anim = animation.FuncAnimation(fig, update, interval=100, frames=args.frames, fargs=[ax, args.step_size, args.savefile, mean[4], std[4], optim, args.save_shape_as_txt])
 
     # save animation
     Writer = animation.writers['ffmpeg']
     writer = Writer(fps=5, bitrate=1800)
-    anim.save(savefile+'.mp4', writer=writer)
+    anim.save(args.savefile+'.mp4', writer=writer)
     print('\nAnimation saved.')
 
     # save loss and pred
-    pd.DataFrame(optim.profile).to_csv(savefile+'.csv')
+    pd.DataFrame(optim.profile).to_csv(args.savefile+'.csv')
     print('\nLoss and prediction data saved.')
     
     print('\nShape optimization complete!')
-
+            
 if __name__ == "__main__":
     main() 
