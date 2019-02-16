@@ -77,7 +77,7 @@ class SimplexFT(Function):
             Xi = P[id_start:id_end] # [elem_batch, j+1, d]
             Di = D[id_start:id_end] # [elem_batch, n_channel]
             Ci = C[id_start:id_end] # [elem_batch, 1]
-            CDi = Ci * Di # [elem_batch, n_channel]
+            CDi = Ci.expand_as(Di) * Di # [elem_batch, n_channel]
             sig = torch.einsum('bjd,...d->bj...', (Xi, omega)) 
             sig = torch.unsqueeze(sig, dim=-1) # [elem_batch, j+1, dimX, dimY, dimZ, 1]
             esig = torch.stack((torch.cos(sig), -torch.sin(sig)), dim=-1) # [elem_batch, j+1, dimX, dimY, dimZ, 1, 2]
@@ -89,10 +89,14 @@ class SimplexFT(Function):
             tmp = torch.sum(esig / denom, dim=1) # [elem_batch, dimX, dimY, dimZ, 1, 2]
             CDi.unsqueeze_(-1) # [elem_batch, n_channel, 1]
             for _ in range(n_dims): # unsqueeze to broadcast
-                CDi.unsqueeze_(dim=1) # [elem_batch, 1, 1, 1, n_channel, 1]
-            tmp *= CDi # [elem_batch, dimX, dimY, dimZ, n_channel, 2]
+                CDi.unsqueeze_(dim=1) # [elem_batch, 1, 1, 1, n_channel, 2]
+            shape_ = (list(tmp.shape[:-2])+[n_channel, 2])
+            tmp = tmp * CDi # [elem_batch, dimX, dimY, dimZ, n_channel, 2]
             Fi = torch.sum(tmp, dim=0, keepdim=False) # [dimX, dimY, dimZ, n_channel, 2]
-            Fi[tuple([0] * n_dims)] = - 1 / factorial(j) * torch.sum(CDi, dim=0).unsqueeze(dim=-1)
+            CDi_ = torch.sum(CDi, dim=0)
+            for _ in range(n_dims): # squeeze dims
+                CDi_.squeeze_(dim=0) # [n_channel, 2]
+            Fi[tuple([0] * n_dims)] = - 1 / factorial(j) * CDi_
             F += Fi
 
         F = img(F, deg=j) # Fi *= 1j**j [dimX, dimY, dimZ, n_chan, 2] 2: real/imag
@@ -171,7 +175,7 @@ class SimplexFT(Function):
                 tmp[tuple([0] * n_dims)] = 0
                 tmp = tmp.permute(*(list(range(n_dims, 2+n_dims)) + list(range(n_dims)) + list(range(2+n_dims, len(tmp.shape)))))
                 tmp = img(tmp, deg=j)
-                tmp *= dF # [elem_batch, j+1, dimX, dimY, dimZ, n_channel, 2]
+                tmp = tmp * dF # [elem_batch, j+1, dimX, dimY, dimZ, n_channel, 2]
                 tmp = tmp.unsqueeze(-3) * omega.unsqueeze(-1).unsqueeze(-1) # [elem_batch, j+1, dimX, dimY, dimZ, n_dims, n_channel, 2]
                 tmp = torch.sum(tmp, dim=tuple([-1]+list(range(2, 2+n_dims)))) # [elem_batch, j+1, n_dims, n_channel]
                 tmp = torch.sum(tmp * Di.unsqueeze(1).unsqueeze(1), dim=-1)     # [elem_batch, j+1, n_dims]

@@ -192,7 +192,7 @@ def get_polygon_E_D(V):
     E0 = torch.LongTensor(permute_seq(0, V.shape[0]))
     E1 = torch.LongTensor(permute_seq(1, V.shape[0]))
     E = torch.stack((E0, E1), dim=-1)
-    D = torch.ones(E.shape[0], 1, device=V.device)
+    D = torch.ones(E.shape[0], 1, device=V.device, dtype=V.dtype)
     return E, D
 
 def normalize_V(V, margin=0.2):
@@ -228,3 +228,10 @@ def readOBJ(filename, check=True):
     V = np.array(V)
     F = np.array(F)-1
     return V, F
+
+def spec_gaussian_filter(res, sig):
+    omega = fftfreqs(res, dtype=torch.float64) # [dim0, dim1, dim2, d]
+    dis = torch.sqrt(torch.sum(omega ** 2, dim=-1))
+    filter_ = torch.exp(-0.5*((sig*2*dis/res[0])**2)).unsqueeze(-1).unsqueeze(-1)
+    filter_.requires_grad = False
+    return filter_
