@@ -234,4 +234,5 @@ def spec_gaussian_filter(res, sig):
     dis = torch.sqrt(torch.sum(omega ** 2, dim=-1))
     filter_ = torch.exp(-0.5*((sig*2*dis/res[0])**2)).unsqueeze(-1).unsqueeze(-1)
     filter_.requires_grad = False
+
     return filter_
