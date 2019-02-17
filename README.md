@@ -1,7 +1,7 @@
 ## DDSL: Deep Differential Simplex Layer for Neural Networks
 By: [Chiyu "Max" Jiang](www.maxjiang.ml), [Dana Lansigan](http://dlansigan.github.io/), [Philip Marcus](https://www.me.berkeley.edu/people/faculty/philip-s-marcus), [Matthias Niessner](http://niessnerlab.org/)
 
-\[[Project Website]()\] \[[Paper]()\]
+\[[Project Website]()\] \[[Paper](https://arxiv.org/abs/1901.11082)\]
 
 <img src="./doc/teaser.png" alt="DDSL_teaser" width=400>
 
