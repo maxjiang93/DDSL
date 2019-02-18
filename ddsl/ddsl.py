@@ -114,7 +114,10 @@ class SimplexFT(Function):
         """
         :param dF: per-frequency sensitivity from downstream layers of shape [dimX, dimY, dimZ, n_channel, 2]
         """
-        if ctx.needs_input_grad[0]:
+        if ctx.subdim and ctx.needs_input_grad[2]:
+            warnings.warn("Cannot compute D gradients with subdim mode (E.shape[1] == V.shape[1] == j).", RuntimeWarning)
+
+        if ctx.needs_input_grad[0] or ctx.needs_input_grad[2]:
             V, E, D, C = ctx.saved_tensors
 
             n_dims = V.shape[1]
@@ -141,7 +144,8 @@ class SimplexFT(Function):
             P = V[E] # [n_elem, j+1, d]
 
             # initialize output dV
-            dV = torch.zeros_like(V) # [j+1, n_dims]
+            dV = torch.zeros_like(V) if ctx.needs_input_grad[0] else None # [j+1, n_dims]
+            dD = torch.zeros_like(D) if ctx.needs_input_grad[2] else None # [n_elem, n_chan]
 
             # compute element-point tensor
             P = V[E] # [n_elem, j+1, n_dims]
@@ -166,56 +170,69 @@ class SimplexFT(Function):
                 for dim in range(1, j+1):
                     denom *= sig - sig[:, seq(dim)]
                 Si = esig / denom # [elem_batch, j+1, dimX, dimY, dimZ, 1, 2]
-                # first part: tmp
-                tmp = torch.zeros_like(Si) # [elem_batch, j+1, dimX, dimY, dimZ, 1, 2]
-                for dim in range(1, j+1):
-                    tmp += (Si[:, seq(dim)] + Si) / (sig[:, seq(dim)] - sig)
-                tmp -= img(Si, deg=1) # [elem_batch, j+1, dimX, dimY, dimZ, 1, 2]
-                tmp = tmp.permute(*(list(range(2, 2+n_dims)) + [0, 1] + list(range(2+n_dims, len(tmp.shape)))))
-                tmp[tuple([0] * n_dims)] = 0
-                tmp = tmp.permute(*(list(range(n_dims, 2+n_dims)) + list(range(n_dims)) + list(range(2+n_dims, len(tmp.shape)))))
-                tmp = img(tmp, deg=j)
-                tmp = tmp * dF # [elem_batch, j+1, dimX, dimY, dimZ, n_channel, 2]
-                tmp = tmp.unsqueeze(-3) * omega.unsqueeze(-1).unsqueeze(-1) # [elem_batch, j+1, dimX, dimY, dimZ, n_dims, n_channel, 2]
-                tmp = torch.sum(tmp, dim=tuple([-1]+list(range(2, 2+n_dims)))) # [elem_batch, j+1, n_dims, n_channel]
-                tmp = torch.sum(tmp * Di.unsqueeze(1).unsqueeze(1), dim=-1)     # [elem_batch, j+1, n_dims]
-                tmp *= Ci.unsqueeze(-1) # [elem_batch, j+1, n_dims]
-                
-                # second part: tmp2
+
+                # reduce S over each element and multiply by imag and dF
                 S = torch.sum(Si, dim=1) # [elem_batch, dimX, dimY, dimZ, 1, 2]
                 S = S.permute(*(list(range(1, 1+n_dims)) + [0] + list(range(1+n_dims, len(S.shape))))) # [dimX, dimY, dimZ, elem_batch, 1, 2]
                 S[tuple([0] * n_dims)] = - 1 / factorial(j)
                 S = S.permute(*([n_dims] + list(range(n_dims)) + list(range(1+n_dims, len(S.shape))))) # [elem_batch, dimX, dimY, dimZ, 1, 2]
-                tmp2 = img(S, deg=j) * dF # [elem_batch, dimX, dimY, dimZ, n_channel, 2]
-                tmp2 = torch.sum(tmp2, dim=tuple([-1] + list(range(1, 1+n_dims)))) # [elem_batch, n_channel]
-                tmp2 *= ((-1)**(j+1)) / (2**j) 
-                tmp2 /= Ci # [elem_batch, n_channel]
-                tmp2 = (tmp2 * Di).sum(-1) # [elem_batch]
-                # summation term
-                B = construct_B_batch(Xi) # [elem_batch, j+2, j+2]
-                B_adj = batch_adjugate(B) # [elem_batch, j+2, j+2]
-                B_adj_sub = B_adj[:, 1:, 1:] # [elem_batch, j+1, j+1]
-                tmpsum = torch.zeros_like(Xi) # [elem_batch, j+1, n_dims]
-                rind = list(range(j+1))
-                for dim in range(1, j+1):
-                    adj = B_adj_sub[:, rind, seq(dim)].unsqueeze(-1) # [elem_batch, j+1, 1]
-                    tmpsum += 2 * (Xi - Xi[:, seq(dim)]) * adj # [elem_batch, j+1, n_dims]
-                tmp2 = tmpsum * tmp2.unsqueeze(-1).unsqueeze(-1)  # [elem_batch, j+1, n_dims]
-                
-                tmp += tmp2
-                ddV = coalesce_update(Ei, tmp, dV.shape)
-                dV += ddV
+                S_ = img(S, deg=j) * dF # [elem_batch, dimX, dimY, dimZ, n_channel, 2]
+                S_ = torch.sum(S_, dim=tuple([-1] + list(range(1, 1+n_dims)))) # [elem_batch, n_channel]
+
+                if ctx.needs_input_grad[0]:
+                    # first part: tmp
+                    tmp = torch.zeros_like(Si) # [elem_batch, j+1, dimX, dimY, dimZ, 1, 2]
+                    for dim in range(1, j+1):
+                        tmp += (Si[:, seq(dim)] + Si) / (sig[:, seq(dim)] - sig)
+                    tmp -= img(Si, deg=1) # [elem_batch, j+1, dimX, dimY, dimZ, 1, 2]
+                    tmp = tmp.permute(*(list(range(2, 2+n_dims)) + [0, 1] + list(range(2+n_dims, len(tmp.shape)))))
+                    tmp[tuple([0] * n_dims)] = 0
+                    tmp = tmp.permute(*(list(range(n_dims, 2+n_dims)) + list(range(n_dims)) + list(range(2+n_dims, len(tmp.shape)))))
+                    tmp = img(tmp, deg=j)
+                    tmp = tmp * dF # [elem_batch, j+1, dimX, dimY, dimZ, n_channel, 2]
+                    tmp = tmp.unsqueeze(-3) * omega.unsqueeze(-1).unsqueeze(-1) # [elem_batch, j+1, dimX, dimY, dimZ, n_dims, n_channel, 2]
+                    tmp = torch.sum(tmp, dim=tuple([-1]+list(range(2, 2+n_dims)))) # [elem_batch, j+1, n_dims, n_channel]
+                    tmp = torch.sum(tmp * Di.unsqueeze(1).unsqueeze(1), dim=-1)     # [elem_batch, j+1, n_dims]
+                    tmp *= Ci.unsqueeze(-1) # [elem_batch, j+1, n_dims]
+                    
+                    # second part: tmp2
+                    tmp2 = S_ * ((-1)**(j+1)) / (2**j) 
+                    tmp2 = tmp2 / Ci # [elem_batch, n_channel]
+                    tmp2 = (tmp2 * Di).sum(-1) # [elem_batch]
+                    # summation term
+                    B = construct_B_batch(Xi) # [elem_batch, j+2, j+2]
+                    B_adj = batch_adjugate(B) # [elem_batch, j+2, j+2]
+                    B_adj_sub = B_adj[:, 1:, 1:] # [elem_batch, j+1, j+1]
+                    tmpsum = torch.zeros_like(Xi) # [elem_batch, j+1, n_dims]
+                    rind = list(range(j+1))
+                    for dim in range(1, j+1):
+                        adj = B_adj_sub[:, rind, seq(dim)].unsqueeze(-1) # [elem_batch, j+1, 1]
+                        tmpsum += 2 * (Xi - Xi[:, seq(dim)]) * adj # [elem_batch, j+1, n_dims]
+                    tmp2 = tmpsum * tmp2.unsqueeze(-1).unsqueeze(-1)  # [elem_batch, j+1, n_dims]
+                    
+                    tmp += tmp2
+                    ddV = coalesce_update(Ei, tmp, dV.shape)
+                    dV += ddV
+
+                if ctx.needs_input_grad[2]:
+                    ddD = S_ * Ci # [elem_batch, n_channel]
+                    dD[id_start:id_end] = ddD # [elem_batch, n_channel]
                 
             if mode == "density":
-                dV *= res[0] ** j
-                
+                if ctx.needs_input_grad[0]:
+                    dV *= res[0] ** j
+                if ctx.needs_input_grad[2]:
+                    dD *= res[0] ** j
+
             if ctx.subdim:
-                dV = dV[:-1]
+                if ctx.needs_input_grad[0]:
+                    dV = dV[:-1]
                 
         else:
             dV = None
+            dD = None
             
-        return dV, None, None, None, None, None, None, None
+        return dV, None, dD, None, None, None, None, None
 
     
 class DDSL_spec(nn.Module):
