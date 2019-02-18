@@ -89,6 +89,7 @@ def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
     t4 = time()
     delta = 1e-6
     dV_fd_all = torch.zeros(*(list(V.shape)+list(dF.shape)), dtype=V.dtype).cuda()
+    dD_fd_all = torch.zeros(*(list(D.shape)+list(dF.shape)), dtype=V.dtype).cuda()
     for ii in range(V.shape[0]):
         for jj in range(V.shape[1]):
             V_p = V.clone()
@@ -98,8 +99,18 @@ def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
             Freq_p = ddsl(V_p, E, D)
             Freq_m = ddsl(V_m, E, D)
             dV_fd_all[ii,jj] = (Freq_p - Freq_m) / delta / 2
+    for ii in range(D.shape[0]):
+        for jj in range(D.shape[1]):
+            D_p = D.clone()
+            D_m = D.clone()
+            D_p[ii, jj] += delta
+            D_m[ii, jj] -= delta
+            Freq_p = ddsl(V, E, D_p)
+            Freq_m = ddsl(V, E, D_m)
+            dD_fd_all[ii,jj] = (Freq_p - Freq_m) / delta / 2
             
     dV_fd = (dV_fd_all * dF).view(V.shape[0], V.shape[1], -1).sum(-1)
+    dD_fd = (dD_fd_all * dF).view(D.shape[0], D.shape[1], -1).sum(-1)
     t5 = time()
 
     if print_stats:
@@ -118,7 +129,9 @@ def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
         print("Finite Difference Gradient:")
         print(dV_fd.detach().cpu().numpy())
     
-    match = torch.abs(dV - dV_fd) < accu
-    pass_test = (torch.sum(match) == match.numel()).detach().cpu().item() == 1
+    match_V = torch.abs(dV - dV_fd) < accu
+    match_D = torch.abs(dD - dD_fd) < accu
+    pass_test_dV = (torch.sum(match_V) == match_V.numel()).detach().cpu().item() == 1
+    pass_test_dD = (torch.sum(match_D) == match_D.numel()).detach().cpu().item() == 1
     
-    return pass_test
+    return pass_test_dV, pass_test_dD
