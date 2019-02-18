@@ -19,7 +19,7 @@ def rand_hull(n_points, dim, hull=False, dtype=torch.float32):
     V += 0.5
     return V, E
     
-def generate_random_mesh(j, dim, npoints, uniform_density=False, device="cuda"):
+def generate_random_mesh(j, dim, npoints, n_chan=1, uniform_density=False, device="cuda"):
     assert(j <= dim)
     dev = torch.device(device)
     
@@ -48,17 +48,18 @@ def generate_random_mesh(j, dim, npoints, uniform_density=False, device="cuda"):
             E = torch.arange(V.shape[0]).view(-1, 4)
             
     if uniform_density:
-        D = torch.ones(E.shape[0], 1, dtype=V.dtype)
+        D = torch.ones(E.shape[0], n_chan, dtype=V.dtype)
     else:
-        D = torch.rand(E.shape[0], 1, dtype=V.dtype)
+        D = torch.rand(E.shape[0], n_chan, dtype=V.dtype)
     V, E, D = V.to(dev), E.to(dev), D.to(dev)
     V.requires_grad = True
+    D.requires_grad = True
     
     return V, E, D
 
-def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
+def test_ddsl(j, dim, npoints, res, n_chan=1, accu=0.1, print_stats=False):
     # generate a random mesh
-    V, E, D = generate_random_mesh(j, dim, npoints)
+    V, E, D = generate_random_mesh(j, dim, npoints, n_chan=n_chan)
 
     res = [res] * dim
     t = [1] * dim
@@ -66,9 +67,9 @@ def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
     # Sensitivity on each frequency mode
     r = res[0]
     if dim == 2:
-        dF = torch.rand(r, int(r/2)+1, 1, 2, dtype=V.dtype, device=V.device) # unit sensitivity
+        dF = torch.rand(r, int(r/2)+1, n_chan, 2, dtype=V.dtype, device=V.device) # unit sensitivity
     elif dim == 3:
-        dF = torch.rand(r, r, int(r/2)+1, 1, 2, dtype=V.dtype, device=V.device) # unit sensitivity
+        dF = torch.rand(r, r, int(r/2)+1, n_chan, 2, dtype=V.dtype, device=V.device) # unit sensitivity
     else:
         print("Test not implemented for dimensions other than 2 and 3.")
 
@@ -84,6 +85,7 @@ def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
     loss.backward()
     t3 = time()
     dV = V.grad
+    dD = D.grad
 
     # Finite difference approximation
     t4 = time()
@@ -123,11 +125,20 @@ def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
 
         print("\n/ ***** Correctness ***** /")
         print("Analytical Gradient Matches Finite Difference Gradient to Accuracy {}:".format(accu))
+        print("V-gradient:")
         print((torch.abs(dV - dV_fd) < accu).detach().cpu().numpy() == 1)
+        print("D-gradient:")
+        print((torch.abs(dD - dD_fd) < accu).detach().cpu().numpy() == 1)
         print("\n Analytical Gradient:")
+        print("V-gradient:")
         print(dV.detach().cpu().numpy())
+        print("D-gradient:")
+        print(dD.detach().cpu().numpy())
         print("Finite Difference Gradient:")
+        print("V-gradient:")
         print(dV_fd.detach().cpu().numpy())
+        print("D-gradient:")
+        print(dD_fd.detach().cpu().numpy())
     
     match_V = torch.abs(dV - dV_fd) < accu
     match_D = torch.abs(dD - dD_fd) < accu
