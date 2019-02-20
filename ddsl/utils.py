@@ -200,21 +200,20 @@ def normalize_V(V, margin=0.2):
     normalize V into (0,1)
     :param V: [#V, 2]
     """
-    V = V.clone()
-    # normalize V
-    V_bb = torch.max(V, dim=0)[0] - torch.min(V, dim=0)[0]
-    V_c = (torch.max(V, dim=0)[0] + torch.min(V, dim=0)[0]) / 2
+    if isinstance(V, torch.Tensor):
+        V = V.clone()
+        # normalize V
+        V_bb = torch.max(V, dim=0)[0] - torch.min(V, dim=0)[0]
+        V_c = (torch.max(V, dim=0)[0] + torch.min(V, dim=0)[0]) / 2
+    else:
+        V = V.copy()
+        # normalize V
+        V_bb = np.max(V, axis=0) - np.min(V, axis=0)
+        V_c = (np.max(V, axis=0) + np.min(V, axis=0)) / 2
     V -= V_c
     V /= (1/(1-margin))*V_bb.max()
     V += 0.5
     return V
-
-def spec_gaussian_filter(res, sig):
-    omega = fftfreqs(res, dtype=torch.float64) # [dim0, dim1, dim2, d]
-    dis = torch.sqrt(torch.sum(omega ** 2, dim=-1))
-    filter_ = torch.exp(-0.5*((sig*2*dis/res[0])**2)).unsqueeze(-1).unsqueeze(-1)
-    filter_.requires_grad = False
-    return filter_
 
 def readOBJ(filename, check=True):
     assert(os.path.exists(filename) and filename[-4:] == '.obj')
@@ -235,3 +234,11 @@ def readOBJ(filename, check=True):
     V = np.array(V)
     F = np.array(F)-1
     return V, F
+
+def spec_gaussian_filter(res, sig):
+    omega = fftfreqs(res, dtype=torch.float64) # [dim0, dim1, dim2, d]
+    dis = torch.sqrt(torch.sum(omega ** 2, dim=-1))
+    filter_ = torch.exp(-0.5*((sig*2*dis/res[0])**2)).unsqueeze(-1).unsqueeze(-1)
+    filter_.requires_grad = False
+
+    return filter_
