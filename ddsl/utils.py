@@ -38,7 +38,7 @@ def construct_B(V, E):
     ne = E.shape[0]
     j = E.shape[1]-1
     P = V[E]
-    
+
     B = torch.zeros(ne, j+2, j+2, device=V.device, dtype=V.dtype)
     B[:, :, 0] = 1
     B[:, 0, :] = 1
@@ -47,7 +47,7 @@ def construct_B(V, E):
             B[:, r, c] = torch.sum((P[:, r-1] - P[:, c-1]) ** 2, dim=-1)
             B[:, c, r] = B[:, r, c]
     B[:, 0, 0] = 0
-    
+
     return B
 
 def construct_B_batch(P):
@@ -58,7 +58,7 @@ def construct_B_batch(P):
     """
     ne = P.shape[0]
     j = P.shape[1]-1
-    
+
     B = torch.zeros(ne, j+2, j+2, device=P.device, dtype=P.dtype)
     B[:, :, 0] = 1
     B[:, 0, :] = 1
@@ -67,7 +67,7 @@ def construct_B_batch(P):
             B[:, r, c] = torch.sum((P[:, r-1] - P[:, c-1]) ** 2, dim=-1)
             B[:, c, r] = B[:, r, c]
     B[:, 0, 0] = 0
-    
+
     return B
 
 def simplex_content(V, E, signed=False):
@@ -135,7 +135,7 @@ def batch_det(A):
     Return:
     Tensor of shape (*)
     """
-    LU, pivots = A.btrifact()
+    LU, pivots = torch.lu(A)
     det_LU = torch.einsum('...ii->...i', LU).prod(-1)
     pivots -= 1
     d = pivots.shape[-1]
@@ -149,7 +149,7 @@ def batch_cofactor(A):
     """
     Batch cofactor matrix of square matrix A of shape (*, N, N)
     Return:
-    Batched cofactor matrix (tensor) of shape (*, N, N) 
+    Batched cofactor matrix (tensor) of shape (*, N, N)
     """
     A_inv = torch.inverse(A)
     A_det = batch_det(A).unsqueeze(-1).unsqueeze(-1)
@@ -160,7 +160,7 @@ def batch_adjugate(A):
     """
     Batch adjugate matrix of square matrix A of shape (*, N, N)
     Return:
-    Batched adjugate matrix (tensor) of shape (*, N, N) 
+    Batched adjugate matrix (tensor) of shape (*, N, N)
     """
     A_inv = torch.inverse(A)
     A_det = batch_det(A).unsqueeze(-1).unsqueeze(-1)
@@ -187,7 +187,7 @@ def img(x, deg=1): # imaginary of tensor (assume last dim: real/imag)
 def get_polygon_E_D(V):
     """
     get E and D matrices from polygon assuming single polygon and continuous connection
-    :param V: [#V, 2] 
+    :param V: [#V, 2]
     """
     E0 = torch.LongTensor(permute_seq(0, V.shape[0]))
     E1 = torch.LongTensor(permute_seq(1, V.shape[0]))
