@@ -50,8 +50,8 @@ class ShapeNetLoader(Dataset):
     img = transform.resize(img, self.imsize)
     raster = np.load(self.rasterlist[idx])
     mesh0 = trimesh.load(self.meshlist[idx])
-    vertices = torch.tensor(mesh0.vertices).numpy()
-    vertices = normalize_V(vertices)
+    vertices = torch.tensor(mesh0.vertices)
+    vertices = normalize_V(vertices).numpy()
     mesh = trimesh.Trimesh(vertices, mesh0.faces)
     pts = sample.sample_surface(mesh, self.npts)[0]
 
