@@ -11,6 +11,21 @@ from trimesh import sample
 import cv2
 
 
+def normalize_V(V, margin=0.2):
+    """
+    normalize V into (0,1)
+    :param V: [#V, 3]
+    """
+    V = V.clone()
+    # normalize V
+    V_bb = torch.max(V, dim=-2)[0] - torch.min(V, dim=-2)[0]
+    V_c = (torch.max(V, dim=-2)[0] + torch.min(V, dim=-2)[0]) / 2
+    V -= V_c
+    V /= (1/(1-margin))*V_bb.max()
+    V += 0.5
+    return V
+
+
 class ShapeNetLoader(Dataset):
   def __init__(self, dataroot, partition, npts=2048, imsize=(224, 224)):
     assert(partition in ['test', 'train', 'val'])
@@ -34,7 +49,9 @@ class ShapeNetLoader(Dataset):
     img = cv2.imread(os.path.join(self.imlist[idx], s))
     img = transform.resize(img, self.imsize, anti_aliasing=True)
     raster = np.load(self.rasterlist[idx])
-    mesh = trimesh.load(self.meshlist[idx])
+    mesh0 = trimesh.load(self.meshlist[idx])
+    vertices = torch.tensor(mesh0.vertices).numpy()
+    mesh = trimesh.Trimesh(vertices, mesh0.faces)
     pts = sample.sample_surface(mesh, self.npts)[0]
 
     img = torch.tensor(img).permute(2,0,1).type(torch.float32)
