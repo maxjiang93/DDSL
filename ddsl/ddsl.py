@@ -36,7 +36,7 @@ class SimplexFT(Function):
         n_channel = D.shape[1]
 
         ## save context info for backwards
-        ctx.mark_non_differentiable(E) # mark non-differentiable
+        ctx.mark_non_differentiable(E, D) # mark non-differentiable
         ctx.res = res
         ctx.t = t
         ctx.j = j
@@ -114,7 +114,6 @@ class SimplexFT(Function):
         """
         :param dF: per-frequency sensitivity from downstream layers of shape [dimX, dimY, dimZ, n_channel, 2]
         """
-        # from pdb import set_trace; set_trace()
         if ctx.subdim and ctx.needs_input_grad[2]:
             warnings.warn("Cannot compute D gradients with subdim mode (E.shape[1] == V.shape[1] == j).", RuntimeWarning)
 
