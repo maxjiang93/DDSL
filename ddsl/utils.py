@@ -135,7 +135,7 @@ def batch_det(A):
     Return:
     Tensor of shape (*)
     """
-    LU, pivots = A.lu()
+    LU, pivots = A.btrifact()
     det_LU = torch.einsum('...ii->...i', LU).prod(-1)
     pivots -= 1
     d = pivots.shape[-1]
