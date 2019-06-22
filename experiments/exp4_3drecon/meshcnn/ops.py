@@ -52,8 +52,10 @@ class MeshConv(_MeshConv):
             self.nv_prev = pkl['V'].shape[0]
             L = sparse2tensor(pkl['L'].tocoo())
             F2V = sparse2tensor(pkl['F2V'].tocoo())
+        intp = torch.tensor(pkl['Intp'].todense())
         self.register_buffer("L", L)
         self.register_buffer("F2V", F2V)
+        self.register_buffer("intp", intp)
         
     def forward(self, input):
         # compute gradient
@@ -123,6 +125,7 @@ class ResBlock(nn.Module):
         self.nv_prev = self.conv2.nv_prev
         self.down = DownSamp(self.nv_prev)
         self.diff_chan = (in_chan != out_chan)
+        self.register_buffer('intp', self.conv2.intp)  # interpolation matrix
 
         if coarsen:
             # self.seq1 = nn.Sequential(self.down, self.conv1, self.bn1, self.relu, 

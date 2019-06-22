@@ -166,7 +166,7 @@ def train(args, model, loader, criterion_r, criterion_c, mesh_sampler, optimizer
             writer.add_scalar('training/chamfer', losses_cham.val, args.TRAIN_GLOB_STEP)
             writer.add_scalar('training/totalloss', losses_sum.val, args.TRAIN_GLOB_STEP)
 
-            args.TRAIN_GLOB_STEP += 1
+        args.TRAIN_GLOB_STEP += 1
 
     logger.info("Train Time per Epoch: {} min".format((time.time() - time0)/60))
 
@@ -282,6 +282,7 @@ def main():
     parser.add_argument('--n_tgt_pts', default=2048, type=int, help="number of target points per shape")
     parser.add_argument('--n_gen_pts', default=2048, type=int, help="number of points to sample per generated shape")
     parser.add_argument('--no_deform', action='store_true', default=False, help="do not predict mesh deformation")
+    parser.add_argument('--model2', action='store_true', default=False, help="use alternative model")
 
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -303,7 +304,7 @@ def main():
     args.tblogdir = os.path.join(args.log_dir, "tensorboard_log")
     if not os.path.exists(args.tblogdir):
         os.makedirs(args.tblogdir)
-    writer = SummaryWriter(logdir=args.tblogdir)
+    writer = SummaryWriter(log_dir=args.tblogdir)
 
     trainset = ShapeNetLoader(args.data_folder, "train", npts=args.n_tgt_pts)
     valset = ShapeNetLoader(args.data_folder, "val", npts=args.n_tgt_pts)
@@ -315,7 +316,10 @@ def main():
     if not os.path.exists(args.meshsamp_dir): os.makedirs(args.meshsamp_dir)
     
     # initialize and parallelize model
-    model = SphereNet(mesh_folder=args.mesh_folder, nlevels=args.nlevels, feat=args.feat, deform=args.deform)
+    if not args.model2:
+        model = SphereNet(mesh_folder=args.mesh_folder, nlevels=args.nlevels, feat=args.feat, deform=args.deform)
+    else:
+        model = SphereNet(mesh_folder=args.mesh_folder, nlevels=args.nlevels, feat=args.feat)
 
     model = nn.DataParallel(model)
     model.to(device)

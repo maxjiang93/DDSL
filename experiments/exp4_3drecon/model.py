@@ -71,6 +71,61 @@ class SphereNet(nn.Module):
         return self.f
     
 
+class SphereNet2(nn.Module):
+    def __init__(self, mesh_folder, nlevels=3, feat=256, encoder=models.resnet18(pretrained=True)):
+        super(SphereNet, self).__init__()
+        self.mesh_folder = mesh_folder
+        self.encoder = nn.Sequential(*list(encoder.children())[:-1])
+        self.nlevels = nlevels
+        self.feat = feat
+        self.fc = nn.Conv2d(512, feat*12, kernel_size=1, stride=1)
+        self.convs = [Up(in_ch=int(feat/(2**i)),
+                         out_ch=int(feat/(2**(i+1))),
+                         level=i+1,
+                         mesh_folder=mesh_folder)
+                      for i in range(nlevels)]
+        self.conv_out = [nn.Conv1d(in_channels=int(feat/(2**i)),
+                                   out_channels=3, kernel_size=1, stride=1) 
+                                   for i in range(nlevels+1)]
+        self.convs = nn.ModuleList(self.convs)
+        self.conv_out = nn.ModuleList(self.conv_out)
+
+        self.scale = Parameter(torch.tensor([0.1]*nlevels))
+        pkl = pickle.load(open(self._meshfile(nlevels), "rb"))
+        v = torch.tensor(pkl['V']).unsqueeze(0).type(torch.float32)
+        v = v / 4 + 0.5  # rescale and recenter base
+        f = torch.tensor(pkl['F']).type(torch.int32)
+        self.register_buffer('v', v)
+        self.register_buffer('f', f)
+
+    def forward(self, x):
+        # feed image through resnet
+        x = self.encoder(x)
+
+        # linear
+        x = self.fc(x)
+
+        # reshape
+        b = x.shape[0]
+        x = x.view(b, self.feat, 12)  # 12 is number of vertices at ico0
+        xout = torch.sigmoid(self.conv_out[0](x))
+        # mesh conv
+        for i, (conv, convout) in enumerate(zip(self.convs, self.conv_out[1:])):
+            nv_prev = x.shape[-1]
+            x = conv(x)
+            x_ = convout(x)
+            xout = torch.matmul(xout, conv.intp.permute(1,0))
+            xout[..., nv_prev:] += self.scale[i] * torch.tanh(x_[..., nv_prev])
+
+        return xout
+
+    def _meshfile(self, i):
+        return os.path.join(self.mesh_folder, "icosphere_{}.pkl".format(i))
+
+    @property
+    def face(self):
+        return self.f
+
 
 class Up(nn.Module):
     def __init__(self, in_ch, out_ch, level, mesh_folder, bias=True):
@@ -82,6 +137,7 @@ class Up(nn.Module):
         half_out = int(out_ch/2)
         self.up = MeshConv_transpose(in_ch, in_ch, mesh_file, stride=2)
         self.conv = ResBlock(in_ch, half_out, out_ch, level, False, mesh_folder)
+        self.register_buffer('intp', self.conv.intp)
 
     def forward(self, x):
         x = self.up(x)
