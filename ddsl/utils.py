@@ -235,6 +235,25 @@ def readOBJ(filename, check=True):
     F = np.array(F)-1
     return V, F
 
+def subSimplices(F, j):
+    """
+    Get subsimplex meshes
+    """
+    assert(j<F.shape[1]-1)
+    assert(F.shape[1] in [2, 3])
+    if j == 0:
+        E = np.sort(np.unique(F.reshape(-1)))[:, np.newaxis]
+    elif j == 1:
+        F_ = F.copy()
+        F_ = np.sort(F_, axis=1)
+        if F.shape[1] == 3:
+            E = np.unique(np.concatenate((F_[:, [0, 1]], F_[:, [0, 2]], F_[:, [1, 2]]), axis=0), axis=0)
+        if F.shape[1] == 2:
+            E = F
+    elif j == 2:
+        E = F
+    return E
+        
 def spec_gaussian_filter(res, sig):
     omega = fftfreqs(res, dtype=torch.float64) # [dim0, dim1, dim2, d]
     dis = torch.sqrt(torch.sum(omega ** 2, dim=-1))

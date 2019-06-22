@@ -12,8 +12,9 @@ python train.py \
 --data_folder="data" \
 --mesh_folder="mesh_files" \
 --log_interval=10 \
---log_dir="logs/r0c1" \
+--log_dir="logs/m2r0c1" \
 --timestamp \
 --workers=12 \
 --n_tgt_pts=2048 \
 --n_gen_pts=2048 
+--model2

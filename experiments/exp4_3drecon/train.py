@@ -284,6 +284,7 @@ def main():
     parser.add_argument('--n_tgt_pts', default=2048, type=int, help="number of target points per shape")
     parser.add_argument('--n_gen_pts', default=2048, type=int, help="number of points to sample per generated shape")
     parser.add_argument('--no_deform', action='store_true', default=False, help="do not predict mesh deformation")
+    parser.add_argument('--model2', action='store_true', default=False, help="use alternative model")
 
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -317,7 +318,10 @@ def main():
     if not os.path.exists(args.meshsamp_dir): os.makedirs(args.meshsamp_dir)
     
     # initialize and parallelize model
-    model = SphereNet(mesh_folder=args.mesh_folder, nlevels=args.nlevels, feat=args.feat, deform=args.deform)
+    if not args.model2:
+        model = SphereNet(mesh_folder=args.mesh_folder, nlevels=args.nlevels, feat=args.feat, deform=args.deform)
+    else:
+        model = SphereNet(mesh_folder=args.mesh_folder, nlevels=args.nlevels, feat=args.feat)
 
     model = nn.DataParallel(model)
     model.to(device)
