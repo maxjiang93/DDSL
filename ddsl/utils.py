@@ -200,10 +200,16 @@ def normalize_V(V, margin=0.2):
     normalize V into (0,1)
     :param V: [#V, 2]
     """
-    V = V.clone()
-    # normalize V
-    V_bb = torch.max(V, dim=0)[0] - torch.min(V, dim=0)[0]
-    V_c = (torch.max(V, dim=0)[0] + torch.min(V, dim=0)[0]) / 2
+    if isinstance(V, torch.Tensor):
+        V = V.clone()
+        # normalize V
+        V_bb = torch.max(V, dim=0)[0] - torch.min(V, dim=0)[0]
+        V_c = (torch.max(V, dim=0)[0] + torch.min(V, dim=0)[0]) / 2
+    else:
+        V = V.copy()
+        # normalize V
+        V_bb = np.max(V, axis=0) - np.min(V, axis=0)
+        V_c = (np.max(V, axis=0) + np.min(V, axis=0)) / 2
     V -= V_c
     V /= (1/(1-margin))*V_bb.max()
     V += 0.5
