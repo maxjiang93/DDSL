@@ -47,10 +47,11 @@ class ShapeNetLoader(Dataset):
     # load one random image
     s = '{:03d}.jpg'.format(np.random.choice(24))
     img = cv2.imread(os.path.join(self.imlist[idx], s))
-    img = transform.resize(img, self.imsize, anti_aliasing=True)
+    img = transform.resize(img, self.imsize)
     raster = np.load(self.rasterlist[idx])
     mesh0 = trimesh.load(self.meshlist[idx])
-    vertices = torch.tensor(mesh0.vertices).numpy()
+    vertices = torch.tensor(mesh0.vertices)
+    vertices = normalize_V(vertices).numpy()
     mesh = trimesh.Trimesh(vertices, mesh0.faces)
     pts = sample.sample_surface(mesh, self.npts)[0]
 
