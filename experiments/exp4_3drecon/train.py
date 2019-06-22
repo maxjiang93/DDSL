@@ -13,6 +13,8 @@ from collections import OrderedDict
 from loader import ShapeNetLoader
 from model import SphereNet, BatchedRasterLoss3D, ChamferLoss, MeshSampler
 
+torch.backends.cudnn.benchmark=True
+
 
 def load_my_state_dict(self, state_dict, exclude='none'):
     own_state = self.state_dict()
@@ -166,7 +168,7 @@ def train(args, model, loader, criterion_r, criterion_c, mesh_sampler, optimizer
             writer.add_scalar('training/chamfer', losses_cham.val, args.TRAIN_GLOB_STEP)
             writer.add_scalar('training/totalloss', losses_sum.val, args.TRAIN_GLOB_STEP)
 
-            args.TRAIN_GLOB_STEP += 1
+        args.TRAIN_GLOB_STEP += 1
 
     logger.info("Train Time per Epoch: {} min".format((time.time() - time0)/60))
 
@@ -303,7 +305,7 @@ def main():
     args.tblogdir = os.path.join(args.log_dir, "tensorboard_log")
     if not os.path.exists(args.tblogdir):
         os.makedirs(args.tblogdir)
-    writer = SummaryWriter(logdir=args.tblogdir)
+    writer = SummaryWriter(log_dir=args.tblogdir)
 
     trainset = ShapeNetLoader(args.data_folder, "train", npts=args.n_tgt_pts)
     valset = ShapeNetLoader(args.data_folder, "val", npts=args.n_tgt_pts)

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 import torchvision.models as models
-from meshcnn import MeshConv, MeshConv_transpose, ResBlock
+from meshcnn import MeshConv, MeshConv_transpose, ResBlock, spmatmul
 import sys; sys.path.append("../../ddsl")
 from ddsl import DDSL_phys
 
@@ -31,6 +31,8 @@ class SphereNet(nn.Module):
         v = torch.tensor(pkl['V']).unsqueeze(0).type(torch.float32)
         v = v / 4 + 0.5  # rescale and recenter base
         f = torch.tensor(pkl['F']).type(torch.int32)
+        L = sparse2tensor(pkl['L'].tocoo())
+        self.register_buffer('L', L)
         self.register_buffer('v', v)
         self.register_buffer('f', f)
 
@@ -192,17 +194,23 @@ class MeshSampler(nn.Module):
         return samp_pts
 
 
+class LaplacianLoss(nn.Module):
+    def __init__(self, mesh_file):
+        pass
+
+
 if __name__ == '__main__':
+    pass
     # net = SphereNet("mesh_files")
     # input = torch.rand([2,3,224,224])
     # out = net(input)
     # print(out.shape)
 
-    import time
-    a = torch.rand(12, 2048, 3).cuda()
-    b = torch.rand(12, 2048, 3).cuda()
-    cl = ChamferLoss('mean', 'chamfer')
-    t0=time.time(); cl(a,b); print(time.time()-t0)
+    # import time
+    # a = torch.rand(12, 2048, 3).cuda()
+    # b = torch.rand(12, 2048, 3).cuda()
+    # cl = ChamferLoss('mean', 'chamfer')
+    # t0=time.time(); cl(a,b); print(time.time()-t0)
 
     # def saveobj(filename, verts, faces):
     #     if faces is not None and faces.min() == 0:
