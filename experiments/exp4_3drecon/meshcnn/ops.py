@@ -52,7 +52,7 @@ class MeshConv(_MeshConv):
             self.nv_prev = pkl['V'].shape[0]
             L = sparse2tensor(pkl['L'].tocoo())
             F2V = sparse2tensor(pkl['F2V'].tocoo())
-        intp = torch.tensor(pkl['Intp'].todense())
+        intp = torch.tensor(pkl['Intp'].todense()).float()
         self.register_buffer("L", L)
         self.register_buffer("F2V", F2V)
         self.register_buffer("intp", intp)

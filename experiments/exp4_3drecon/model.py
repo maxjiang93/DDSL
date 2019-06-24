@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 import torchvision.models as models
-from meshcnn import MeshConv, MeshConv_transpose, ResBlock, spmatmul
+from meshcnn import MeshConv, MeshConv_transpose, ResBlock, spmatmul, sparse2tensor
 import sys; sys.path.append("../../ddsl")
 from ddsl import DDSL_phys
 
@@ -31,8 +31,6 @@ class SphereNet(nn.Module):
         v = torch.tensor(pkl['V']).unsqueeze(0).type(torch.float32)
         v = v / 4 + 0.5  # rescale and recenter base
         f = torch.tensor(pkl['F']).type(torch.int32)
-        L = sparse2tensor(pkl['L'].tocoo())
-        self.register_buffer('L', L)
         self.register_buffer('v', v)
         self.register_buffer('f', f)
 
@@ -75,7 +73,7 @@ class SphereNet(nn.Module):
 
 class SphereNet2(nn.Module):
     def __init__(self, mesh_folder, nlevels=3, feat=256, encoder=models.resnet18(pretrained=True)):
-        super(SphereNet, self).__init__()
+        super(SphereNet2, self).__init__()
         self.mesh_folder = mesh_folder
         self.encoder = nn.Sequential(*list(encoder.children())[:-1])
         self.nlevels = nlevels
@@ -117,9 +115,9 @@ class SphereNet2(nn.Module):
             x = conv(x)
             x_ = convout(x)
             xout = torch.matmul(xout, conv.intp.permute(1,0))
-            xout[..., nv_prev:] += self.scale[i] * torch.tanh(x_[..., nv_prev])
+            xout[..., nv_prev:] += self.scale[i] * torch.tanh(x_[..., nv_prev:])
 
-        return xout
+        return xout.permute(0, 2, 1)
 
     def _meshfile(self, i):
         return os.path.join(self.mesh_folder, "icosphere_{}.pkl".format(i))
@@ -251,8 +249,52 @@ class MeshSampler(nn.Module):
 
 
 class LaplacianLoss(nn.Module):
-    def __init__(self, mesh_file):
-        pass
+    def __init__(self, mesh_folder, nlevels):
+        super(LaplacianLoss, self).__init__()
+        mesh_file = os.path.join(mesh_folder, "icosphere_{}.pkl".format(nlevels))
+        pkl = pickle.load(open(mesh_file, "rb"))
+        L = sparse2tensor(pkl['L'].tocoo())
+        self.register_buffer('L', L)
+
+    def forward(self, V):
+        """
+        Args: 
+          V: [batch, #v, 3]
+        Returns:
+          lap_loss: [1,] loss value
+        """
+        laplacian = spmatmul(V.permute(0, 2, 1), self.L)
+        lap_norm = torch.norm(laplacian, dim=1)  # [batch, #v]
+        lap_loss = torch.mean(lap_norm)
+        return lap_loss
+
+
+class EdgeLoss(nn.Module):
+    def __init__(self, F, maxedge):
+        super(EdgeLoss, self).__init__()
+        self.maxedge = maxedge
+        self.register_buffer('F', F)
+
+    def forward(self, V):
+        """
+        Args: 
+          V: [batch, #v, 3]
+        Returns:
+          edge_loss: [1,] loss value
+        """
+        tri = V[:, self.F]  # [batch, #f, 3verts, 3dims]
+        v0 = tri[:, :, 0, :]  # [batch, #f, 3dims]
+        v1 = tri[:, :, 1, :]  # [batch, #f, 3dims]
+        v2 = tri[:, :, 2, :]  # [batch, #f, 3dims]
+        e0 = torch.norm(v1 - v0, dim=-1)  # [batch, #f]
+        e1 = torch.norm(v2 - v1, dim=-1)  # [batch, #f]
+        e2 = torch.norm(v0 - v2, dim=-1)  # [batch, #f]
+        e = torch.cat((e0, e1, e2), dim=1)  # [batch, 3#f]
+        if not self.maxedge:
+            edge_loss = torch.mean(e)
+        else:
+            edge_loss = torch.mean(e.max(1)[0])
+        return edge_loss
 
 
 if __name__ == '__main__':

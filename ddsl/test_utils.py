@@ -135,3 +135,85 @@ def test_ddsl(j, dim, npoints, res, accu=0.1, print_stats=False):
     pass_test_dD = (torch.sum(match_D) == match_D.numel()).detach().cpu().item() == 1
     
     return pass_test_dV, pass_test_dD
+
+def test_ddsl_time(j, dim, npoints, res, ebatch, print_stats=False):
+    # generate a random mesh
+    V, E, D = generate_random_mesh(j, dim, npoints)
+
+    res = [res] * dim
+    t = [1] * dim
+
+    # Sensitivity on each frequency mode
+    r = res[0]
+    if dim == 2:
+        dF = torch.rand(r, int(r/2)+1, 1, 2, dtype=V.dtype, device=V.device) # unit sensitivity
+    elif dim == 3:
+        dF = torch.rand(r, r, int(r/2)+1, 1, 2, dtype=V.dtype, device=V.device) # unit sensitivity
+    else:
+        print("Test not implemented for dimensions other than 2 and 3.")
+
+    # Analytical Adjoint solution
+    ddsl = DDSL_spec(res,t,j,elem_batch=ebatch,mode='density')
+    t0 = time()
+    F = ddsl(V,E,D)
+    t1 = time()
+    loss = (F*dF).view(-1).sum(0)
+    if V.grad is not None:
+        V.grad.zero_()
+    t2 = time()
+    loss.backward()
+    t3 = time()
+    fwd_time = t1-t0
+    bwd_time = t3-t2
+    if print_stats:
+        print("/ ***** Runtime Analysis ***** /")
+        print("Resolution: {}, # Elements: {}, Simplex Degree j: {}".format(res, E.shape[0], E.shape[1]-1))
+        print("Forward     Time: {}".format(fwd_time))
+        print("Analytical  Backward Time: {}".format(bwd_time))
+    return fwd_time, bwd_time
+
+if __name__ == '__main__':
+    # test_ddsl_time(3, 3, 200, 32, print_stats=True)
+    import matplotlib as mpl; mpl.use('Agg')
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({'font.size': 14})
+    res = np.array([4, 8, 16, 32], dtype=np.int)
+    ebatch = np.array([2000, 2000, 2000, 500, 100])
+    forward_time = []
+    backward_time = []
+    for r, eb in zip(res, ebatch):
+        ft, bt = test_ddsl_time(3, 3, 200, r, ebatch=eb, print_stats=True)
+        forward_time.append(ft)
+        backward_time.append(bt)
+    forward_time = np.array(forward_time)
+    backward_time = np.array(backward_time)
+    plt.figure()
+    plt.plot(res, forward_time, label='forward time')
+    plt.plot(res, backward_time, label='backward time')
+    plt.legend()
+    plt.xlabel('resolution per dim')
+    plt.ylabel('time (s)')
+    plt.title('3D speed benchmark for tri mesh with ~1200 faces.')
+    plt.savefig('speed3d.png')
+
+    res = np.array([16, 32, 64, 128, 256], dtype=np.int)
+    ebatch = np.array([2000, 2000, 2000, 500, 100])
+    forward_time = []
+    backward_time = []
+    for r, eb in zip(res, ebatch):
+        ft, bt = test_ddsl_time(2, 2, 130, r, ebatch=eb, print_stats=True)
+        forward_time.append(ft)
+        backward_time.append(bt)
+    forward_time = np.array(forward_time)
+    backward_time = np.array(backward_time)
+    plt.figure()
+    plt.plot(res, forward_time, label='forward time')
+    plt.plot(res, backward_time, label='backward time')
+    plt.legend()
+    plt.xlabel('resolution per dim')
+    plt.ylabel('time (s)')
+    plt.title('2D speed benchmark for polygon with ~250 edges.')
+    plt.savefig('speed2d.png')
+
+
+
