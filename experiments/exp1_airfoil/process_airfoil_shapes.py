@@ -15,7 +15,7 @@ for root, dirs, files in os.walk(directory):
             # Create save file name
             save_file='processed_data/'+airfoil+'.pt'
             if not os.path.exists(save_file):
-                airfoil_phys(airfoil, res=(224,224), device='cpu', save_name=save_file, grad=False)
+                airfoil_phys(airfoil, res=(224,224), save_name=save_file, grad=False)
             i=i+1
 
             if (i+1)%100==0:
