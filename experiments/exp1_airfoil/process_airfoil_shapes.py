@@ -4,14 +4,14 @@ import time
 print('Now processing airfoil shapes...')
 
 # Convert all airfoils in airfoil-data
-directory='data'
+directory='data'    
 i=0
 start=time.time()
 for root, dirs, files in os.walk(directory):
     for airfoil in dirs:
         if not os.path.exists('data/'+airfoil+'/seligdatfile'):
             print('WARNING: Selig .dat file for '+airfoil+' not found. Airfoil not converted and saved.')
-        else:
+        else:                   
             # Create save file name
             save_file='processed_data/'+airfoil+'.pt'
             if not os.path.exists(save_file):
@@ -22,5 +22,5 @@ for root, dirs, files in os.walk(directory):
                 end=time.time()
                 print(str(i+1)+' airfoils processed! Time elapsed: '+str(end-start))
                 start=time.time()
-
+                    
 print('Processing complete!')
