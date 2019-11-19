@@ -15,8 +15,8 @@ To replicate the experiments in our paper, please refer to codes in the [experim
 
 ### Related Projects
 This code base contains code for the two projects below. The DDSL layer is a differentiable version for the one outlined in the ealier paper.
-- Jiang, Chiyu, Dana Lynn Ona Lansigan, Philip Marcus, and Matthias Nießner. "DDSL: Deep Differentiable Simplex Layer for Learning Geometric Signals." The IEEE International Conference on Computer Vision (ICCV), 2019.
-- Jiang, Chiyu, Dequan Wang, Jingwei Huang, Philip Marcus, and Matthias Nießner. "Convolutional Neural Networks on non-uniform geometrical signals using Euclidean spectral transformation." International Conference on Learning Representations (ICLR), 2019.
+- Jiang, Chiyu, Dana Lynn Ona Lansigan, Philip Marcus, and Matthias Nießner. "[DDSL: Deep Differentiable Simplex Layer for Learning Geometric Signals.](https://arxiv.org/abs/1901.11082)" The IEEE International Conference on Computer Vision (ICCV), 2019.
+- Jiang, Chiyu, Dequan Wang, Jingwei Huang, Philip Marcus, and Matthias Nießner. "[Convolutional Neural Networks on non-uniform geometrical signals using Euclidean spectral transformation.](https://arxiv.org/abs/1901.02070)" International Conference on Learning Representations (ICLR), 2019.
 
 ### Cite
 Please cite our work if you find it helpful.
