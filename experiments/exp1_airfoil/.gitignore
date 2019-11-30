@@ -1,0 +1,4 @@
+data/
+processed_data/
+test.png
+*.tar.gz

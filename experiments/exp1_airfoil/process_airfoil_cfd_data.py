@@ -6,6 +6,8 @@ import os
 import csv
 import numpy as np
 
+print('Now processing CFD data...')
+
 # Process data
 def process_airfoil_data(directory='data'):
     '''

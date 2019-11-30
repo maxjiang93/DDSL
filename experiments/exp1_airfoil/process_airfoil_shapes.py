@@ -1,6 +1,8 @@
 from airfoil_NUFT import *
 import time
 
+print('Now processing airfoil shapes...')
+
 # Convert all airfoils in airfoil-data
 directory='data'    
 i=0
